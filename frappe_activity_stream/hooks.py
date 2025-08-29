@@ -137,13 +137,18 @@ app_license = "agpl-3.0"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "*": {
+        "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_update",
+        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_create",
+        "on_trash": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_delete",
+        "on_submit": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_submit",
+        "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel"
+    }
+}
+
+on_login = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_login"
+on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_logout"
 
 # Scheduled Tasks
 # ---------------
@@ -192,7 +197,7 @@ app_license = "agpl-3.0"
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-# ignore_links_on_delete = ["Communication", "ToDo"]
+ignore_links_on_delete = ["Activity Stream"]
 
 # Request Events
 # ----------------
