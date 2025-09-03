@@ -216,9 +216,13 @@ def log_login(login_manager):
             "document_name": user,
             "event_origin": event_origin,
             "api_method": path if event_origin == "API Call" else None,
-            "api_args": args if event_origin == "API Call" else None,
+            "api_args": json.dumps(args, indent=4)
+            if event_origin == "API Call"
+            else None,
             "background_job": path if event_origin == "Background Job" else None,
-            "background_job_args": args if event_origin == "Background Job" else None,
+            "background_job_args": json.dumps(args, indent=4)
+            if event_origin == "Background Job"
+            else None,
         }
     )
     activity.db_insert()
@@ -245,9 +249,13 @@ def log_logout(login_manager):
             "document_name": user,
             "event_origin": event_origin,
             "api_method": path if event_origin == "API Call" else None,
-            "api_args": args if event_origin == "API Call" else None,
+            "api_args": json.dumps(args, indent=4)
+            if event_origin == "API Call"
+            else None,
             "background_job": path if event_origin == "Background Job" else None,
-            "background_job_args": args if event_origin == "Background Job" else None,
+            "background_job_args": json.dumps(args, indent=4)
+            if event_origin == "Background Job"
+            else None,
         }
     )
     activity.db_insert()
