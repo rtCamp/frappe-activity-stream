@@ -146,12 +146,16 @@ def log_event(doc, action):
         if action in ["Create", "Update"]:
             data_after = doc
             if action == "Update":
-                data_before = doc._doc_before_save if doc._doc_before_save else None
+                data_before = (
+                    doc._doc_before_save
+                    if doc._doc_before_save
+                    else frappe.get_doc({"doctype": doctype, "name": docname})
+                )
             else:
-                data_before = None
+                data_before = frappe.get_doc({"doctype": doctype, "name": docname})
         elif action in ["Delete"]:
             data_before = doc
-            data_after = None
+            data_after = frappe.get_doc({"doctype": doctype, "name": docname})
         else:
             data_before = None
             data_after = None
@@ -161,7 +165,10 @@ def log_event(doc, action):
             is_single = True
             docname = doctype
 
-        diff = get_diff(data_before, data_after)
+        diff = None
+        if data_before or data_after:
+            diff = get_diff(data_before, data_after)
+
         if diff:
             # Remove sensitive data from diff
             settings = frappe.get_single("Activity Stream Settings")
