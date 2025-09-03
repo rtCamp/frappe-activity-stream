@@ -133,88 +133,95 @@ def get_event_details():
 
 
 def log_event(doc, action):
-    user = frappe.session.user
-    ip_address = frappe.local.request_ip or None
-    if not should_log_activity(doc.doctype, action, user, ip_address):
-        return
-    # check if this event is from a API call or a Background Job
-    origin, path, args = get_event_details()
+    try:
+        user = frappe.session.user
+        ip_address = frappe.local.request_ip or None
+        if not should_log_activity(doc.doctype, action, user, ip_address):
+            return
+        # check if this event is from a API call or a Background Job
+        origin, path, args = get_event_details()
 
-    doctype, docname = doc.doctype, doc.name
+        doctype, docname = doc.doctype, doc.name
 
-    if action in ["Create", "Update"]:
-        data_after = doc
-        if action == "Update":
-            data_before = doc._doc_before_save if doc._doc_before_save else None
+        if action in ["Create", "Update"]:
+            data_after = doc
+            if action == "Update":
+                data_before = doc._doc_before_save if doc._doc_before_save else None
+            else:
+                data_before = None
+        elif action in ["Delete"]:
+            data_before = doc
+            data_after = None
         else:
             data_before = None
-    elif action in ["Delete"]:
-        data_before = doc
-        data_after = None
-    else:
-        data_before = None
-        data_after = None
+            data_after = None
 
-    is_single = False
-    if frappe.get_meta(doctype).issingle:
-        is_single = True
-        docname = doctype
+        is_single = False
+        if frappe.get_meta(doctype).issingle:
+            is_single = True
+            docname = doctype
 
-    diff = get_diff(data_before, data_after)
-    if diff:
-        # Remove sensitive data from diff
-        settings = frappe.get_single("Activity Stream Settings")
-        sensitive_keys = settings.get_sensitive_keys()
-        # Mask sensitive fields in parent changed fields
-        changed_list = []
-        for change in diff.get("changed", []):
-            change_list = list(change)
-            field = change_list[0]
-            if field in sensitive_keys:
-                change_list[1] = "*****"
-                change_list[2] = "*****"
-            changed_list.append(tuple(change_list))
-        diff["changed"] = changed_list
-
-        # Mask sensitive fields in table row changes
-        row_changed_list = []
-        for row_change in diff.get("row_changed", []):
-            row_change_list = list(row_change)
-            # row_change[3] is a list of field changes
-            field_changes = []
-            for field_change in row_change_list[3]:
-                field_change_list = list(field_change)
-                field = field_change_list[0]
+        diff = get_diff(data_before, data_after)
+        if diff:
+            # Remove sensitive data from diff
+            settings = frappe.get_single("Activity Stream Settings")
+            sensitive_keys = settings.get_sensitive_keys()
+            # Mask sensitive fields in parent changed fields
+            changed_list = []
+            for change in diff.get("changed", []):
+                change_list = list(change)
+                field = change_list[0]
                 if field in sensitive_keys:
-                    field_change_list[1] = "*****"
-                    field_change_list[2] = "*****"
-                field_changes.append(tuple(field_change_list))
-            row_change_list[3] = field_changes
-            row_changed_list.append(tuple(row_change_list))
-        diff["row_changed"] = row_changed_list
+                    change_list[1] = "*****"
+                    change_list[2] = "*****"
+                changed_list.append(tuple(change_list))
+            diff["changed"] = changed_list
 
-    activity = frappe.get_doc(
-        {
-            "doctype": "Activity Stream",
-            "user": user,
-            "owner": user,
-            "action": action,
-            "ip_address": ip_address,
-            "datetime": frappe.utils.now_datetime(),
-            "document_type": doctype,
-            "document_name": docname,
-            "event_origin": origin,
-            "api_method": path if origin == "API Call" else None,
-            "api_args": json.dumps(args, indent=4) if origin == "API Call" else None,
-            "background_job": path if origin == "Background Job" else None,
-            "background_job_args": json.dumps(args, indent=4)
-            if origin == "Background Job"
-            else None,
-            "diff": frappe.as_json(diff, indent=None, separators=(",", ":")),
-        }
-    )
-    activity.summary = generate_summary(activity, is_single)
-    activity.db_insert()
+            # Mask sensitive fields in table row changes
+            row_changed_list = []
+            for row_change in diff.get("row_changed", []):
+                row_change_list = list(row_change)
+                # row_change[3] is a list of field changes
+                field_changes = []
+                for field_change in row_change_list[3]:
+                    field_change_list = list(field_change)
+                    field = field_change_list[0]
+                    if field in sensitive_keys:
+                        field_change_list[1] = "*****"
+                        field_change_list[2] = "*****"
+                    field_changes.append(tuple(field_change_list))
+                row_change_list[3] = field_changes
+                row_changed_list.append(tuple(row_change_list))
+            diff["row_changed"] = row_changed_list
+
+        activity = frappe.get_doc(
+            {
+                "doctype": "Activity Stream",
+                "user": user,
+                "owner": user,
+                "action": action,
+                "ip_address": ip_address,
+                "datetime": frappe.utils.now_datetime(),
+                "document_type": doctype,
+                "document_name": docname,
+                "event_origin": origin,
+                "api_method": path if origin == "API Call" else None,
+                "api_args": json.dumps(args, indent=4)
+                if origin == "API Call"
+                else None,
+                "background_job": path if origin == "Background Job" else None,
+                "background_job_args": json.dumps(args, indent=4)
+                if origin == "Background Job"
+                else None,
+                "diff": frappe.as_json(diff, indent=None, separators=(",", ":")),
+            }
+        )
+        activity.summary = generate_summary(activity, is_single)
+        activity.db_insert()
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), f"Error logging activity: {action} on {doc}"
+        )
 
 
 def log_create(doc, method):
@@ -238,65 +245,75 @@ def log_cancel(doc, method):
 
 
 def log_login(login_manager):
-    user = login_manager.user
-    ip_address = frappe.local.request_ip or None
-    if not should_log_activity("User", "Login", user, ip_address):
-        return
-    event_origin, path, args = get_event_details()
+    try:
+        user = login_manager.user
+        ip_address = frappe.local.request_ip or None
+        if not should_log_activity("User", "Login", user, ip_address):
+            return
+        event_origin, path, args = get_event_details()
 
-    activity = frappe.get_doc(
-        {
-            "owner": user,
-            "doctype": "Activity Stream",
-            "user": user,
-            "action": "Login",
-            "ip_address": ip_address,
-            "datetime": frappe.utils.now_datetime(),
-            "summary": f"User {user} logged in",
-            "document_type": "User",
-            "document_name": user,
-            "event_origin": event_origin,
-            "api_method": path if event_origin == "API Call" else None,
-            "api_args": json.dumps(args, indent=4)
-            if event_origin == "API Call"
-            else None,
-            "background_job": path if event_origin == "Background Job" else None,
-            "background_job_args": json.dumps(args, indent=4)
-            if event_origin == "Background Job"
-            else None,
-        }
-    )
-    activity.db_insert()
+        activity = frappe.get_doc(
+            {
+                "owner": user,
+                "doctype": "Activity Stream",
+                "user": user,
+                "action": "Login",
+                "ip_address": ip_address,
+                "datetime": frappe.utils.now_datetime(),
+                "summary": f"User {user} logged in",
+                "document_type": "User",
+                "document_name": user,
+                "event_origin": event_origin,
+                "api_method": path if event_origin == "API Call" else None,
+                "api_args": json.dumps(args, indent=4)
+                if event_origin == "API Call"
+                else None,
+                "background_job": path if event_origin == "Background Job" else None,
+                "background_job_args": json.dumps(args, indent=4)
+                if event_origin == "Background Job"
+                else None,
+            }
+        )
+        activity.db_insert()
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), f"Error logging login activity for {user}"
+        )
 
 
 def log_logout(login_manager):
-    user = login_manager.user
-    ip_address = frappe.local.request_ip or None
-    if not should_log_activity("User", "Logout", user, ip_address):
-        return
+    try:
+        user = login_manager.user
+        ip_address = frappe.local.request_ip or None
+        if not should_log_activity("User", "Logout", user, ip_address):
+            return
 
-    event_origin, path, args = get_event_details()
-    # insert logout records directly
-    activity = frappe.get_doc(
-        {
-            "owner": user,
-            "doctype": "Activity Stream",
-            "user": user,
-            "action": "Logout",
-            "ip_address": ip_address,
-            "datetime": frappe.utils.now_datetime(),
-            "summary": f"User {user} logged out",
-            "document_type": "User",
-            "document_name": user,
-            "event_origin": event_origin,
-            "api_method": path if event_origin == "API Call" else None,
-            "api_args": json.dumps(args, indent=4)
-            if event_origin == "API Call"
-            else None,
-            "background_job": path if event_origin == "Background Job" else None,
-            "background_job_args": json.dumps(args, indent=4)
-            if event_origin == "Background Job"
-            else None,
-        }
-    )
-    activity.db_insert()
+        event_origin, path, args = get_event_details()
+        # insert logout records directly
+        activity = frappe.get_doc(
+            {
+                "owner": user,
+                "doctype": "Activity Stream",
+                "user": user,
+                "action": "Logout",
+                "ip_address": ip_address,
+                "datetime": frappe.utils.now_datetime(),
+                "summary": f"User {user} logged out",
+                "document_type": "User",
+                "document_name": user,
+                "event_origin": event_origin,
+                "api_method": path if event_origin == "API Call" else None,
+                "api_args": json.dumps(args, indent=4)
+                if event_origin == "API Call"
+                else None,
+                "background_job": path if event_origin == "Background Job" else None,
+                "background_job_args": json.dumps(args, indent=4)
+                if event_origin == "Background Job"
+                else None,
+            }
+        )
+        activity.db_insert()
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), f"Error logging logout activity for {user}"
+        )
