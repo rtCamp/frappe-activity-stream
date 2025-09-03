@@ -10,6 +10,8 @@
   "general_section",
   "keep_records_indefinitely",
   "keep_records_for",
+  "section_break_frdu",
+  "sensitive_keys",
   "rules_tab",
   "include_list_section",
   "doctype_and_action"
@@ -62,12 +64,23 @@
    "fieldname": "enabled",
    "fieldtype": "Check",
    "label": "Enabled"
+  },
+  {
+   "fieldname": "section_break_frdu",
+   "fieldtype": "Section Break"
+  },
+  {
+   "default": "pwd, password, secret, token, api_key, access_token",
+   "description": "Separated by <b><code>,</code></b> (Comma). These keys in args or changed values will be masked.\n<br>\nThese keys will always be replaced: <code>pwd</code>, <code>password</code>, <code>secret</code>, <code>token</code>, <code>api_key</code>, <code>access_token</code>",
+   "fieldname": "sensitive_keys",
+   "fieldtype": "Small Text",
+   "label": "Sensitive Keys"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-08-29 12:20:09.291229",
+ "modified": "2025-09-03 13:20:28.334194",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream Settings",

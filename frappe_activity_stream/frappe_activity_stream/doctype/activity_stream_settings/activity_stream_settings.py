@@ -7,7 +7,22 @@ from frappe.model.document import Document
 
 
 class ActivityStreamSettings(Document):
-    pass
+    def get_sensitive_keys(self):
+        """
+        Returns a list of sensitive keys to be masked in activity stream logs.
+        """
+        default_sensitive_keys = {
+            "pwd",
+            "password",
+            "secret",
+            "token",
+            "api_key",
+            "access_token",
+        }
+        user_defined_keys = set(
+            key.strip() for key in (self.sensitive_keys or "").split(",") if key.strip()
+        )
+        return default_sensitive_keys.union(user_defined_keys)
 
 
 def should_log_activity(doc_type, action, user, ip_address):

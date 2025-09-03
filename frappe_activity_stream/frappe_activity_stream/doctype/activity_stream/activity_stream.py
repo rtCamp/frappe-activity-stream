@@ -16,6 +16,22 @@ class ActivityStream(Document):
     pass
 
 
+def remove_sensitive_data(dict):
+    """
+    Remove sensitive data from args dictionary.
+    """
+    if not dict:
+        return dict
+
+    settings = frappe.get_single("Activity Stream Settings")
+    sensitive_keys = settings.get_sensitive_keys()
+
+    for key in sensitive_keys:
+        if key in dict:
+            dict[key] = "*****"
+    return dict
+
+
 def generate_summary(activity, is_single=False):
     """
     Generate a concise, detailed summary of the activity.
@@ -103,14 +119,14 @@ def get_event_details():
                 args = json.loads(request.get_data() or "{}")
             except Exception:
                 args = {}
-            return "API Call", request.path, args
+            return "API Call", request.path, remove_sensitive_data(args)
 
     if hasattr(frappe.local, "job") and frappe.local.job:
         # Event from Background Job
         return (
             "Background Job",
             getattr(frappe.local.job, "job_name", None),
-            getattr(frappe.local.job, "kwargs", None),
+            remove_sensitive_data(getattr(frappe.local.job, "kwargs", None)),
         )
 
     return None, None, None
@@ -145,6 +161,37 @@ def log_event(doc, action):
         docname = doctype
 
     diff = get_diff(data_before, data_after)
+    if diff:
+        # Remove sensitive data from diff
+        settings = frappe.get_single("Activity Stream Settings")
+        sensitive_keys = settings.get_sensitive_keys()
+        # Mask sensitive fields in parent changed fields
+        changed_list = []
+        for change in diff.get("changed", []):
+            change_list = list(change)
+            field = change_list[0]
+            if field in sensitive_keys:
+                change_list[1] = "*****"
+                change_list[2] = "*****"
+            changed_list.append(tuple(change_list))
+        diff["changed"] = changed_list
+
+        # Mask sensitive fields in table row changes
+        row_changed_list = []
+        for row_change in diff.get("row_changed", []):
+            row_change_list = list(row_change)
+            # row_change[3] is a list of field changes
+            field_changes = []
+            for field_change in row_change_list[3]:
+                field_change_list = list(field_change)
+                field = field_change_list[0]
+                if field in sensitive_keys:
+                    field_change_list[1] = "*****"
+                    field_change_list[2] = "*****"
+                field_changes.append(tuple(field_change_list))
+            row_change_list[3] = field_changes
+            row_changed_list.append(tuple(row_change_list))
+        diff["row_changed"] = row_changed_list
 
     activity = frappe.get_doc(
         {
@@ -196,12 +243,6 @@ def log_login(login_manager):
     if not should_log_activity("User", "Login", user, ip_address):
         return
     event_origin, path, args = get_event_details()
-    # Remove password from args if present
-    if args:
-        if "pwd" in args:
-            args["pwd"] = "*****"
-        if "password" in args:
-            args["password"] = "*****"
 
     activity = frappe.get_doc(
         {
