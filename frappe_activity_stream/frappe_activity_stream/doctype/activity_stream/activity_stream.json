@@ -133,6 +133,7 @@
    "read_only": 1
   },
   {
+   "depends_on": "diff",
    "fieldname": "data_section",
    "fieldtype": "Section Break",
    "label": "Data"
@@ -154,7 +155,7 @@
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-03 11:33:45.772816",
+ "modified": "2025-09-03 13:02:18.408115",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream",
