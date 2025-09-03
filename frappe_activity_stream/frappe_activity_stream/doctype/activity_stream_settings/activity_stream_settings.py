@@ -23,6 +23,8 @@ def should_log_activity(doc_type, action, user, ip_address):
     allow_list = settings.get("doctype_and_action") or []
     # TODO: add user and ip address based filtering
     for entry in allow_list:
-        if entry.document_type == doc_type and (entry.action == "All" or entry.action == action):
+        if entry.document_type == doc_type and (
+            entry.action == "All" or entry.action == action
+        ):
             return True
     return False

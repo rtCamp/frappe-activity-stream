@@ -143,7 +143,7 @@ doc_events = {
         "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_create",
         "on_trash": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_delete",
         "on_submit": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_submit",
-        "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel"
+        "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel",
     }
 }
 
@@ -153,23 +153,9 @@ on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stre
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"frappe_activity_stream.tasks.all"
-# 	],
-# 	"daily": [
-# 		"frappe_activity_stream.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"frappe_activity_stream.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"frappe_activity_stream.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"frappe_activity_stream.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+    "daily": ["frappe_activity_stream.tasks.clean_old_records.clear_old_records"],
+}
 
 # Testing
 # -------
@@ -246,4 +232,3 @@ ignore_links_on_delete = ["Activity Stream"]
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-

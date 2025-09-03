@@ -1,8 +1,5 @@
-// Copyright (c) 2025, rtCamp and contributors
-// For license information, please see license.txt
-
-// frappe.ui.form.on("Activity Stream", {
-// 	refresh(frm) {
-
-// 	},
-// });
+frappe.ui.form.on("Activity Stream", "refresh", function (frm) {
+  $(frappe.render_template("diff_view", { doc: frm.doc, data: JSON.parse(frm.doc.diff) })).appendTo(
+    frm.fields_dict.diff_visual.$wrapper.empty()
+  );
+});
