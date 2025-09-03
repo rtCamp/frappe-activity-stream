@@ -196,6 +196,13 @@ def log_login(login_manager):
     if not should_log_activity("User", "Login", user, ip_address):
         return
     event_origin, path, args = get_event_details()
+    # Remove password from args if present
+    if args:
+        if "pwd" in args:
+            args["pwd"] = "*****"
+        if "password" in args:
+            args["password"] = "*****"
+
     activity = frappe.get_doc(
         {
             "owner": user,
