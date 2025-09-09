@@ -224,6 +224,8 @@ def log_event(doc, action):
             }
         )
         activity.summary = generate_summary(activity, is_single)
+        # before db_insert, run before_insert hooks
+        activity.run_method("before_insert")
         activity.db_insert()
     except Exception:
         frappe.log_error(
@@ -281,6 +283,8 @@ def log_login(login_manager):
                 else None,
             }
         )
+        # before db_insert, run before_insert hooks
+        activity.run_method("before_insert")
         activity.db_insert()
     except Exception:
         frappe.log_error(
@@ -319,6 +323,8 @@ def log_logout(login_manager):
                 else None,
             }
         )
+        # before db_insert, run before_insert hooks
+        activity.run_method("before_insert")
         activity.db_insert()
     except Exception:
         frappe.log_error(
