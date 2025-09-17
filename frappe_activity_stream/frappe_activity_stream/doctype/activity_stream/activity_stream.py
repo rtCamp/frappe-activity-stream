@@ -10,6 +10,7 @@ from frappe.model.document import Document
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     should_log_activity,
 )
+from frappe_activity_stream.utils import get_ip_address
 
 
 class ActivityStream(Document):
@@ -135,7 +136,7 @@ def get_event_details():
 def log_event(doc, action):
     try:
         user = frappe.session.user
-        ip_address = frappe.local.request_ip or None
+        ip_address = get_ip_address()
         if not should_log_activity(doc.doctype, action, user, ip_address):
             return
         # check if this event is from a API call or a Background Job
@@ -256,7 +257,7 @@ def log_cancel(doc, method):
 def log_login(login_manager):
     try:
         user = login_manager.user
-        ip_address = frappe.local.request_ip or None
+        ip_address = get_ip_address()
         if not should_log_activity("User", "Login", user, ip_address):
             return
         event_origin, path, args = get_event_details()
@@ -295,7 +296,7 @@ def log_login(login_manager):
 def log_logout(login_manager):
     try:
         user = login_manager.user
-        ip_address = frappe.local.request_ip or None
+        ip_address = get_ip_address()
         if not should_log_activity("User", "Logout", user, ip_address):
             return
 
