@@ -93,8 +93,8 @@ def generate_summary(activity, is_single=False):
             summary_parts.append(f"{user} updated {doc_display}")
 
     # API/Background Job info
-    if origin == "API Call" and activity.api_method:
-        summary_parts.append(f"via API {activity.api_method}")
+    if origin == "API Call" and activity.method:
+        summary_parts.append(f"via API {activity.method}")
     elif origin == "Background Job" and activity.background_job:
         summary_parts.append(f"via Background Job {activity.background_job}")
 
@@ -116,11 +116,12 @@ def get_event_details():
             return "Desk", None, None
         # Event from API
         elif request.path.startswith("/api/"):
-            try:
-                args = json.loads(request.get_data() or "{}")
-            except Exception:
-                args = {}
+            args = get_args_from_request(request)
             return "API Call", request.path, remove_sensitive_data(args)
+        else:
+            path = request.path
+            args = get_args_from_request(request)
+            return "Desk", path, remove_sensitive_data(args)
 
     if hasattr(frappe.local, "job") and frappe.local.job:
         # Event from Background Job
@@ -131,6 +132,28 @@ def get_event_details():
         )
 
     return None, None, None
+
+
+def get_args_from_request(request):
+    try:
+        # Prefer JSON body; fallback to form data, then query params
+        args = {}
+        if getattr(request, "is_json", False):
+            args = request.get_json(silent=True) or {}
+        else:
+            raw = request.get_data()
+            if raw:
+                try:
+                    args = json.loads(raw or "{}")
+                except Exception:
+                    pass
+        if not args and request.form:
+            args = request.form.to_dict(flat=True)
+        if not args and request.args:
+            args = request.args.to_dict(flat=True)
+    except Exception:
+        args = {}
+    return args
 
 
 def log_event(doc, action):
@@ -213,14 +236,8 @@ def log_event(doc, action):
                 "document_type": doctype,
                 "document_name": docname,
                 "event_origin": origin,
-                "api_method": path if origin == "API Call" else None,
-                "api_args": json.dumps(args, indent=4)
-                if origin == "API Call"
-                else None,
-                "background_job": path if origin == "Background Job" else None,
-                "background_job_args": json.dumps(args, indent=4)
-                if origin == "Background Job"
-                else None,
+                "method": path,
+                "args": json.dumps(args, indent=4),
                 "diff": frappe.as_json(diff, indent=None, separators=(",", ":")),
             }
         )
@@ -274,14 +291,8 @@ def log_login(login_manager):
                 "document_type": "User",
                 "document_name": user,
                 "event_origin": event_origin,
-                "api_method": path if event_origin == "API Call" else None,
-                "api_args": json.dumps(args, indent=4)
-                if event_origin == "API Call"
-                else None,
-                "background_job": path if event_origin == "Background Job" else None,
-                "background_job_args": json.dumps(args, indent=4)
-                if event_origin == "Background Job"
-                else None,
+                "method": path,
+                "args": json.dumps(args, indent=4),
             }
         )
         # before db_insert, run before_insert hooks
@@ -314,14 +325,8 @@ def log_logout(login_manager):
                 "document_type": "User",
                 "document_name": user,
                 "event_origin": event_origin,
-                "api_method": path if event_origin == "API Call" else None,
-                "api_args": json.dumps(args, indent=4)
-                if event_origin == "API Call"
-                else None,
-                "background_job": path if event_origin == "Background Job" else None,
-                "background_job_args": json.dumps(args, indent=4)
-                if event_origin == "Background Job"
-                else None,
+                "method": path,
+                "args": json.dumps(args, indent=4),
             }
         )
         # before db_insert, run before_insert hooks
