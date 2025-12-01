@@ -197,9 +197,9 @@ def log_access():
                 "args": json.dumps(args, indent=4),
             }
         )
-        # before db_insert, run before_insert hooks
+        # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
-        activity.db_insert()
+        activity.deferred_insert()
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging access activity for {user}"
@@ -292,9 +292,9 @@ def log_event(doc, action):
             }
         )
         activity.summary = generate_summary(activity, is_single)
-        # before db_insert, run before_insert hooks
+        # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
-        activity.db_insert()
+        activity.deferred_insert()
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging activity: {action} on {doc}"
@@ -345,9 +345,9 @@ def log_login(login_manager):
                 "args": json.dumps(args, indent=4),
             }
         )
-        # before db_insert, run before_insert hooks
+        # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
-        activity.db_insert()
+        activity.deferred_insert()
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging login activity for {user}"
@@ -379,9 +379,9 @@ def log_logout(login_manager):
                 "args": json.dumps(args, indent=4),
             }
         )
-        # before db_insert, run before_insert hooks
+        # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
-        activity.db_insert()
+        activity.deferred_insert()
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging logout activity for {user}"
