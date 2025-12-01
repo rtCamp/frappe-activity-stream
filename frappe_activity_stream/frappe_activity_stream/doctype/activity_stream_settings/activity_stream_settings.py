@@ -68,7 +68,7 @@ def should_log_path(path: str, method: str) -> bool:
     settings = get_settings_cached()
     ignore_patterns = settings.get("skip_regex_for_access_log") or ""
     type_of_requests_to_log = settings.get("type_of_requests_to_log", None)
-    if type_of_requests_to_log:
+    if type_of_requests_to_log and type_of_requests_to_log.strip():
         type_of_requests_to_log = type_of_requests_to_log.split(",")
         type_of_requests_to_log = [
             req_type.strip() for req_type in type_of_requests_to_log
