@@ -108,38 +108,52 @@ def generate_summary(activity, is_single=False):
 
 def get_event_details(exclude_desk_events=True):
     """
-    Returns a tuple of (Event Origin, API Method or Background Job Link, API or Background Job Args) if the event
+    Returns a tuple of (Event Origin, API Method or Background Job Link, API or Background Job Args, HTTP Method, Referrer)
     Event Origin can either be None, "Desk", "API" or "Background Job"
     For Desk events, Method and Args will be None
-    For None events, all three values will be None
+    For None events, all five values will be None
     """
-
     if hasattr(frappe.local, "request") and frappe.local.request:
         request = frappe.local.request
-        # Event from Desk
-        if exclude_desk_events and (
-            request.path.startswith("/app/") or request.path.startswith("/desk/")
-        ):
-            return "Desk", None, None, None
-        # Event from API
+        referrer = getattr(request, "referrer", None)
+        if not referrer and hasattr(request, "headers"):
+            referrer = request.headers.get("Referer")
+        args = get_args_from_request(request)
+
+        if request.path.startswith("/app/") or request.path.startswith("/desk/"):
+            if exclude_desk_events:
+                return "Desk", None, None, None, referrer
+            else:
+                return (
+                    "Desk",
+                    request.path,
+                    remove_sensitive_data(args),
+                    request.method,
+                    referrer,
+                )
+
         if request.path.startswith("/api/"):
-            args = get_args_from_request(request)
-            return "API Call", request.path, remove_sensitive_data(args), request.method
-        else:
-            path = request.path
-            args = get_args_from_request(request)
-            return "Desk", path, remove_sensitive_data(args), request.method
+            return (
+                "API Call",
+                request.path,
+                remove_sensitive_data(args),
+                request.method,
+                referrer,
+            )
+
+        path = request.path
+        return "Desk", path, remove_sensitive_data(args), request.method, referrer
 
     if hasattr(frappe.local, "job") and frappe.local.job:
-        # Event from Background Job
         return (
             "Background Job",
             getattr(frappe.local.job, "job_name", None),
             remove_sensitive_data(getattr(frappe.local.job, "kwargs", None)),
             None,
+            None,
         )
 
-    return None, None, None, None
+    return None, None, None, None, None
 
 
 def de_json(input_dict):
@@ -189,7 +203,9 @@ def log_access():
         if not should_log_activity("User", "Access", user, ip_address):
             return
 
-        event_origin, path, args, method = get_event_details(exclude_desk_events=False)
+        event_origin, path, args, method, referrer = get_event_details(
+            exclude_desk_events=False
+        )
 
         if not path:
             return
@@ -211,6 +227,7 @@ def log_access():
                 "event_origin": event_origin,
                 "method": path,
                 "type": method,
+                "referrer": referrer,
                 "args": json.dumps(args, indent=4),
             }
         )
@@ -230,7 +247,7 @@ def log_event(doc, action):
         if not should_log_activity(doc.doctype, action, user, ip_address):
             return
         # check if this event is from a API call or a Background Job
-        origin, path, args, method = get_event_details()
+        origin, path, args, method, referrer = get_event_details()
 
         doctype, docname = doc.doctype, doc.name
 
@@ -305,6 +322,7 @@ def log_event(doc, action):
                 "event_origin": origin,
                 "method": path,
                 "type": method,
+                "referrer": referrer,
                 "args": json.dumps(args, indent=4),
                 "diff": frappe.as_json(diff, indent=None, separators=(",", ":")),
             }
@@ -345,7 +363,7 @@ def log_login(login_manager):
         ip_address = get_ip_address()
         if not should_log_activity("User", "Login", user, ip_address):
             return
-        event_origin, path, args, method = get_event_details()
+        event_origin, path, args, method, referrer = get_event_details()
 
         activity = frappe.get_doc(
             {
@@ -361,6 +379,7 @@ def log_login(login_manager):
                 "event_origin": event_origin,
                 "method": path,
                 "type": method,
+                "referrer": referrer,
                 "args": json.dumps(args, indent=4),
             }
         )
@@ -380,7 +399,7 @@ def log_logout(login_manager):
         if not should_log_activity("User", "Logout", user, ip_address):
             return
 
-        event_origin, path, args, method = get_event_details()
+        event_origin, path, args, method, referrer = get_event_details()
         # insert logout records directly
         activity = frappe.get_doc(
             {
@@ -396,6 +415,7 @@ def log_logout(login_manager):
                 "event_origin": event_origin,
                 "method": path,
                 "type": method,
+                "referrer": referrer,
                 "args": json.dumps(args, indent=4),
             }
         )
