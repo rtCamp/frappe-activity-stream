@@ -210,7 +210,7 @@ def log_access():
         if not path:
             return
 
-        if not should_log_path(path):
+        if not should_log_path(path, method):
             return
 
         activity = frappe.get_doc(

@@ -50,9 +50,17 @@ def should_log_activity(doc_type, action, user, ip_address):
     return False
 
 
-def should_log_path(path: str) -> bool:
+def should_log_path(path: str, method: str) -> bool:
     settings = frappe.get_single("Activity Stream Settings")
     ignore_patterns = settings.get("skip_regex_for_access_log") or ""
+    type_of_requests_to_log = settings.get("type_of_requests_to_log", None)
+    if type_of_requests_to_log:
+        type_of_requests_to_log = type_of_requests_to_log.split(",")
+        type_of_requests_to_log = [
+            req_type.strip() for req_type in type_of_requests_to_log
+        ]
+        if method not in type_of_requests_to_log:
+            return False
     ignore_patterns = [
         pattern.strip() for pattern in ignore_patterns.split("\n") if pattern.strip()
     ]

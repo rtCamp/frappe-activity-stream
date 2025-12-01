@@ -12,6 +12,7 @@
   "keep_records_for",
   "log_access_section",
   "log_access_enabled",
+  "type_of_requests_to_log",
   "skip_regex_for_access_log",
   "section_break_frdu",
   "sensitive_keys",
@@ -97,12 +98,19 @@
    "fieldname": "skip_regex_for_access_log",
    "fieldtype": "Text",
    "label": "Skip Regex"
+  },
+  {
+   "depends_on": "log_access_enabled",
+   "description": "e.g. <code>GET,POST,PUT,DELETE</code>. Leave blank to log all type of requests. ",
+   "fieldname": "type_of_requests_to_log",
+   "fieldtype": "Data",
+   "label": "Type of requests to log"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-12-01 00:26:54.695908",
+ "modified": "2025-12-01 05:18:08.218736",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream Settings",
