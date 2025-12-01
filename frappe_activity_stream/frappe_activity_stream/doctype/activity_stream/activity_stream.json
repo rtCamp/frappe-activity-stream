@@ -125,7 +125,7 @@
   {
    "fieldname": "method",
    "fieldtype": "Data",
-   "label": "Method",
+   "label": "Method / Path",
    "read_only": 1
   },
   {
@@ -135,16 +135,17 @@
    "read_only": 1
   },
   {
-   "depends_on": "eval:doc.event_origin===\"API Call\";",
+   "depends_on": "eval:doc.event_origin===\"API Call\"||doc.event_origin===\"Desk\";",
    "fieldname": "type",
    "fieldtype": "Data",
-   "label": "Type"
+   "label": "Type",
+   "read_only": 1
   }
  ],
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-12-01 00:24:07.732313",
+ "modified": "2025-12-01 02:02:35.245433",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream",

@@ -120,15 +120,15 @@ def get_event_details(exclude_desk_events=True):
         if exclude_desk_events and (
             request.path.startswith("/app/") or request.path.startswith("/desk/")
         ):
-            return "Desk", None, None
+            return "Desk", None, None, None
         # Event from API
-        elif request.path.startswith("/api/"):
+        if request.path.startswith("/api/"):
             args = get_args_from_request(request)
-            return "API Call", request.path, remove_sensitive_data(args)
+            return "API Call", request.path, remove_sensitive_data(args), request.method
         else:
             path = request.path
             args = get_args_from_request(request)
-            return "Desk", path, remove_sensitive_data(args)
+            return "Desk", path, remove_sensitive_data(args), request.method
 
     if hasattr(frappe.local, "job") and frappe.local.job:
         # Event from Background Job
@@ -136,9 +136,25 @@ def get_event_details(exclude_desk_events=True):
             "Background Job",
             getattr(frappe.local.job, "job_name", None),
             remove_sensitive_data(getattr(frappe.local.job, "kwargs", None)),
+            None,
         )
 
-    return None, None, None
+    return None, None, None, None
+
+
+def de_json(input_dict):
+    if not isinstance(input_dict, dict):
+        return input_dict
+    new_dict = {}
+    for key, value in input_dict.items():
+        if not isinstance(value, str):
+            new_dict[key] = value
+            continue
+        try:
+            new_dict[key] = de_json(json.loads(value))
+        except Exception:
+            new_dict[key] = value
+    return new_dict
 
 
 def get_args_from_request(request):
@@ -160,7 +176,7 @@ def get_args_from_request(request):
             args = request.args.to_dict(flat=True)
     except Exception:
         args = {}
-    return args
+    return de_json(args)
 
 
 def log_access():
@@ -173,7 +189,7 @@ def log_access():
         if not should_log_activity("User", "Access", user, ip_address):
             return
 
-        event_origin, path, args = get_event_details(exclude_desk_events=False)
+        event_origin, path, args, method = get_event_details(exclude_desk_events=False)
 
         if not path:
             return
@@ -194,6 +210,7 @@ def log_access():
                 "document_name": user,
                 "event_origin": event_origin,
                 "method": path,
+                "type": method,
                 "args": json.dumps(args, indent=4),
             }
         )
@@ -213,7 +230,7 @@ def log_event(doc, action):
         if not should_log_activity(doc.doctype, action, user, ip_address):
             return
         # check if this event is from a API call or a Background Job
-        origin, path, args = get_event_details()
+        origin, path, args, method = get_event_details()
 
         doctype, docname = doc.doctype, doc.name
 
@@ -287,6 +304,7 @@ def log_event(doc, action):
                 "document_name": docname,
                 "event_origin": origin,
                 "method": path,
+                "type": method,
                 "args": json.dumps(args, indent=4),
                 "diff": frappe.as_json(diff, indent=None, separators=(",", ":")),
             }
@@ -327,7 +345,7 @@ def log_login(login_manager):
         ip_address = get_ip_address()
         if not should_log_activity("User", "Login", user, ip_address):
             return
-        event_origin, path, args = get_event_details()
+        event_origin, path, args, method = get_event_details()
 
         activity = frappe.get_doc(
             {
@@ -342,6 +360,7 @@ def log_login(login_manager):
                 "document_name": user,
                 "event_origin": event_origin,
                 "method": path,
+                "type": method,
                 "args": json.dumps(args, indent=4),
             }
         )
@@ -361,7 +380,7 @@ def log_logout(login_manager):
         if not should_log_activity("User", "Logout", user, ip_address):
             return
 
-        event_origin, path, args = get_event_details()
+        event_origin, path, args, method = get_event_details()
         # insert logout records directly
         activity = frappe.get_doc(
             {
@@ -376,6 +395,7 @@ def log_logout(login_manager):
                 "document_name": user,
                 "event_origin": event_origin,
                 "method": path,
+                "type": method,
                 "args": json.dumps(args, indent=4),
             }
         )
