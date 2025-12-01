@@ -106,7 +106,7 @@ def generate_summary(activity, is_single=False):
     return "; ".join(summary_parts)
 
 
-def get_event_details(skip_desk_check=True):
+def get_event_details(exclude_desk_events=True):
     """
     Returns a tuple of (Event Origin, API Method or Background Job Link, API or Background Job Args) if the event
     Event Origin can either be None, "Desk", "API" or "Background Job"
@@ -117,7 +117,7 @@ def get_event_details(skip_desk_check=True):
     if hasattr(frappe.local, "request") and frappe.local.request:
         request = frappe.local.request
         # Event from Desk
-        if skip_desk_check and (
+        if exclude_desk_events and (
             request.path.startswith("/app/") or request.path.startswith("/desk/")
         ):
             return "Desk", None, None
@@ -173,7 +173,7 @@ def log_access():
         if not should_log_activity("User", "Access", user, ip_address):
             return
 
-        event_origin, path, args = get_event_details(skip_desk_check=False)
+        event_origin, path, args = get_event_details(exclude_desk_events=False)
 
         if not path:
             return

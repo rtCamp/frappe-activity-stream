@@ -3,7 +3,7 @@
 
 # import frappe
 import frappe
-import regex as re  # Regex is linearly faster than the built-in re module
+import regex as re  # Using 'regex' for its faster performance compared to 're'
 from frappe.model.document import Document
 
 
