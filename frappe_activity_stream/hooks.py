@@ -144,7 +144,10 @@ doc_events = {
         "on_trash": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_delete",
         "on_submit": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_submit",
         "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel",
-    }
+    },
+    "Activity Stream Settings": {
+        "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings.invalidate_settings_cache"
+    },
 }
 
 on_login = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_login"

@@ -8,6 +8,7 @@ from frappe.core.doctype.version.version import get_diff
 from frappe.model.document import Document
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
+    get_settings_cached,
     should_log_activity,
     should_log_path,
 )
@@ -27,7 +28,7 @@ def remove_sensitive_data(input_dict):
     if not input_dict:
         return input_dict
 
-    settings = frappe.get_single("Activity Stream Settings")
+    settings = get_settings_cached()
     sensitive_keys = settings.get_sensitive_keys()
 
     for key in sensitive_keys:
@@ -279,7 +280,7 @@ def log_event(doc, action):
 
         if diff:
             # Remove sensitive data from diff
-            settings = frappe.get_single("Activity Stream Settings")
+            settings = get_settings_cached()
             sensitive_keys = settings.get_sensitive_keys()
             # Mask sensitive fields in parent changed fields
             changed_list = []

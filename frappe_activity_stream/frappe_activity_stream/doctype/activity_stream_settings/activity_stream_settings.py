@@ -6,6 +6,8 @@ import frappe
 import regex as re  # Using 'regex' for its faster performance compared to 're'
 from frappe.model.document import Document
 
+ACTIVITY_STREAM_SETTINGS_CACHE_KEY = "activity_stream_settings_cache"
+
 
 class ActivityStreamSettings(Document):
     def get_sensitive_keys(self):
@@ -26,10 +28,22 @@ class ActivityStreamSettings(Document):
         return default_sensitive_keys.union(user_defined_keys)
 
 
+def get_settings_cached():
+    settings = frappe.cache.get_value(ACTIVITY_STREAM_SETTINGS_CACHE_KEY)
+    if not settings:
+        settings = frappe.get_single("Activity Stream Settings")
+        frappe.cache.set_value(ACTIVITY_STREAM_SETTINGS_CACHE_KEY, settings)
+    return settings
+
+
+def invalidate_settings_cache(doc, method):
+    frappe.cache.delete_value(ACTIVITY_STREAM_SETTINGS_CACHE_KEY)
+
+
 def should_log_activity(doc_type, action, user, ip_address):
     if not user:
         return False
-    settings = frappe.get_single("Activity Stream Settings")
+    settings = get_settings_cached()
     if not settings.enabled:
         return False
     if action == "Access":
@@ -51,7 +65,7 @@ def should_log_activity(doc_type, action, user, ip_address):
 
 
 def should_log_path(path: str, method: str) -> bool:
-    settings = frappe.get_single("Activity Stream Settings")
+    settings = get_settings_cached()
     ignore_patterns = settings.get("skip_regex_for_access_log") or ""
     type_of_requests_to_log = settings.get("type_of_requests_to_log", None)
     if type_of_requests_to_log:
