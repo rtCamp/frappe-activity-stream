@@ -18,6 +18,7 @@
   "column_break_nqxz",
   "event_origin",
   "method",
+  "type",
   "args",
   "data_section",
   "diff",
@@ -37,7 +38,7 @@
    "fieldname": "action",
    "fieldtype": "Select",
    "label": "Action",
-   "options": "\nCreate\nUpdate\nDelete\nLogin\nLogout\nSubmit\nCancel",
+   "options": "\nAccess\nCreate\nUpdate\nDelete\nLogin\nLogout\nSubmit\nCancel",
    "read_only": 1
   },
   {
@@ -132,12 +133,18 @@
    "fieldtype": "JSON",
    "label": "Args",
    "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.event_origin===\"API Call\";",
+   "fieldname": "type",
+   "fieldtype": "Data",
+   "label": "Type"
   }
  ],
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-09-23 18:04:12.499528",
+ "modified": "2025-12-01 00:24:07.732313",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream",

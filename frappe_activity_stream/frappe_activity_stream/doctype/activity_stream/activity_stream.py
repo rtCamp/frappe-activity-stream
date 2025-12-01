@@ -9,28 +9,31 @@ from frappe.model.document import Document
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     should_log_activity,
+    should_log_path,
 )
 from frappe_activity_stream.utils import get_ip_address
+
+MAX_SUMMARY_LENGTH = 40
 
 
 class ActivityStream(Document):
     pass
 
 
-def remove_sensitive_data(dict):
+def remove_sensitive_data(input_dict):
     """
     Remove sensitive data from args dictionary.
     """
-    if not dict:
-        return dict
+    if not input_dict:
+        return input_dict
 
     settings = frappe.get_single("Activity Stream Settings")
     sensitive_keys = settings.get_sensitive_keys()
 
     for key in sensitive_keys:
-        if key in dict:
-            dict[key] = "*****"
-    return dict
+        if key in input_dict:
+            input_dict[key] = "*****"
+    return input_dict
 
 
 def generate_summary(activity, is_single=False):
@@ -69,7 +72,9 @@ def generate_summary(activity, is_single=False):
         # Parent field changes
         for change in diff_data.get("changed", []):
             field, old, new = change[:3]
-            changes.append(f"{field} from '{str(old)[:40]}' to '{str(new)[:40]}'")
+            changes.append(
+                f"{field} from '{str(old)[:MAX_SUMMARY_LENGTH]}' to '{str(new)[:MAX_SUMMARY_LENGTH]}'"
+            )
         # Table field changes
         for row_change in diff_data.get("row_changed", []):
             table_field = row_change[0]
@@ -77,7 +82,7 @@ def generate_summary(activity, is_single=False):
             for field_change in row_change[3]:
                 field, old, new = field_change[:3]
                 changes.append(
-                    f"{table_field} row {row_idx}: {field} from '{str(old)[:40]}' to '{str(new)[:40]}'"
+                    f"{table_field} row {row_idx}: {field} from '{str(old)[:MAX_SUMMARY_LENGTH]}' to '{str(new)[:MAX_SUMMARY_LENGTH]}'"
                 )
         # Added/removed rows
         for key in ["added", "removed"]:
@@ -101,7 +106,7 @@ def generate_summary(activity, is_single=False):
     return "; ".join(summary_parts)
 
 
-def get_event_details():
+def get_event_details(skip_desk_check=True):
     """
     Returns a tuple of (Event Origin, API Method or Background Job Link, API or Background Job Args) if the event
     Event Origin can either be None, "Desk", "API" or "Background Job"
@@ -112,7 +117,9 @@ def get_event_details():
     if hasattr(frappe.local, "request") and frappe.local.request:
         request = frappe.local.request
         # Event from Desk
-        if request.path.startswith("/app/"):
+        if skip_desk_check and (
+            request.path.startswith("/app/") or request.path.startswith("/desk/")
+        ):
             return "Desk", None, None
         # Event from API
         elif request.path.startswith("/api/"):
@@ -154,6 +161,49 @@ def get_args_from_request(request):
     except Exception:
         args = {}
     return args
+
+
+def log_access():
+    """
+    Wrapper for before_request hook to log access events.
+    """
+    try:
+        user = frappe.session.user
+        ip_address = get_ip_address()
+        if not should_log_activity("User", "Access", user, ip_address):
+            return
+
+        event_origin, path, args = get_event_details(skip_desk_check=False)
+
+        if not path:
+            return
+
+        if not should_log_path(path):
+            return
+
+        activity = frappe.get_doc(
+            {
+                "owner": user,
+                "doctype": "Activity Stream",
+                "user": user,
+                "action": "Access",
+                "ip_address": ip_address,
+                "datetime": frappe.utils.now_datetime(),
+                "summary": f"User {user} accessed {path}",
+                "document_type": "User",
+                "document_name": user,
+                "event_origin": event_origin,
+                "method": path,
+                "args": json.dumps(args, indent=4),
+            }
+        )
+        # before db_insert, run before_insert hooks
+        activity.run_method("before_insert")
+        activity.db_insert()
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), f"Error logging access activity for {user}"
+        )
 
 
 def log_event(doc, action):

@@ -3,6 +3,7 @@
 
 # import frappe
 import frappe
+import regex as re  # Regex is linearly faster than the built-in re module
 from frappe.model.document import Document
 
 
@@ -31,6 +32,10 @@ def should_log_activity(doc_type, action, user, ip_address):
     settings = frappe.get_single("Activity Stream Settings")
     if not settings.enabled:
         return False
+    if action == "Access":
+        if not settings.get("log_access_enabled"):
+            return False
+        return True
     if doc_type == "User" and action in ["Login", "Logout"]:
         return True
     if doc_type == "Activity Stream":
@@ -43,3 +48,15 @@ def should_log_activity(doc_type, action, user, ip_address):
         ):
             return True
     return False
+
+
+def should_log_path(path: str) -> bool:
+    settings = frappe.get_single("Activity Stream Settings")
+    ignore_patterns = settings.get("skip_regex_for_access_log") or ""
+    ignore_patterns = [
+        pattern.strip() for pattern in ignore_patterns.split("\n") if pattern.strip()
+    ]
+    for pattern in ignore_patterns:
+        if re.search(pattern, path):
+            return False
+    return True

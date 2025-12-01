@@ -187,7 +187,9 @@ ignore_links_on_delete = ["Activity Stream"]
 
 # Request Events
 # ----------------
-# before_request = ["frappe_activity_stream.utils.before_request"]
+before_request = [
+    "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_access"
+]
 # after_request = ["frappe_activity_stream.utils.after_request"]
 
 # Job Events
