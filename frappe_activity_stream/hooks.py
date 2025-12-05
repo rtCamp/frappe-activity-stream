@@ -137,34 +137,28 @@ app_license = "agpl-3.0"
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+    "*": {
+        "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_update",
+        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_create",
+        "on_trash": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_delete",
+        "on_submit": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_submit",
+        "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel",
+    },
+    "Activity Stream Settings": {
+        "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings.invalidate_settings_cache"
+    },
+}
+
+on_login = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_login"
+on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_logout"
 
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"frappe_activity_stream.tasks.all"
-# 	],
-# 	"daily": [
-# 		"frappe_activity_stream.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"frappe_activity_stream.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"frappe_activity_stream.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"frappe_activity_stream.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+    "daily": ["frappe_activity_stream.tasks.clean_old_records.clear_old_records"],
+}
 
 # Testing
 # -------
@@ -192,11 +186,13 @@ app_license = "agpl-3.0"
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-# ignore_links_on_delete = ["Communication", "ToDo"]
+ignore_links_on_delete = ["Activity Stream"]
 
 # Request Events
 # ----------------
-# before_request = ["frappe_activity_stream.utils.before_request"]
+before_request = [
+    "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_access"
+]
 # after_request = ["frappe_activity_stream.utils.after_request"]
 
 # Job Events
@@ -241,4 +237,3 @@ app_license = "agpl-3.0"
 # default_log_clearing_doctypes = {
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
-
