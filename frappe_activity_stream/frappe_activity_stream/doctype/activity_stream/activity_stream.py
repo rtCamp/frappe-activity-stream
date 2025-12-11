@@ -101,8 +101,8 @@ def generate_summary(activity, is_single=False):
     # API/Background Job info
     if origin == "API Call" and activity.method:
         summary_parts.append(f"via API {activity.method}")
-    elif origin == "Background Job" and activity.background_job:
-        summary_parts.append(f"via Background Job {activity.background_job}")
+    elif origin == "Background Job" and activity.method:
+        summary_parts.append(f"via Background Job {activity.method}")
 
     return "; ".join(summary_parts)
 
@@ -325,7 +325,9 @@ def log_event(doc, action):
                 "type": method,
                 "referrer": referrer,
                 "args": json.dumps(args, indent=4),
-                "diff": frappe.as_json(diff, indent=None, separators=(",", ":")),
+                "diff": frappe.as_json(diff, indent=None, separators=(",", ":"))
+                if diff
+                else None,
             }
         )
         activity.summary = generate_summary(activity, is_single)
