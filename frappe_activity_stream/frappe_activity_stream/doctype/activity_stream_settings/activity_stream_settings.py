@@ -49,8 +49,10 @@ def should_log_activity(doc_type, action, user, ip_address):
     if action == "Access":
         if not settings.get("log_access_enabled"):
             return False
+        if user == "Guest" and not settings.get("log_access_for_guest"):
+            return False
         return True
-    if doc_type == "User" and action in ["Login", "Logout"]:
+    if doc_type == "User" and action in ["Login", "Logout", "Impersonate"]:
         return True
     if doc_type == "Activity Stream":
         return False

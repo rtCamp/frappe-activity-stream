@@ -22,7 +22,7 @@ frappe.ui.form.on("Activity Stream Settings", {
               label: "Action",
               fieldname: "action",
               fieldtype: "Select",
-              options: ["All", "Create", "Update", "Delete", "Login", "Logout", "Submit", "Cancel"],
+              options: ["All", "Create", "Update", "Delete", "Submit", "Cancel"],
               default: "All",
               reqd: 1,
             },

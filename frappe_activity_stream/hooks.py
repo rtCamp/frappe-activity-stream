@@ -148,6 +148,9 @@ doc_events = {
     "Activity Stream Settings": {
         "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings.invalidate_settings_cache"
     },
+    "Activity Log": {
+        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.activity_log_after_insert"
+    },
 }
 
 on_login = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_login"

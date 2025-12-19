@@ -12,6 +12,7 @@
   "keep_records_for",
   "log_access_section",
   "log_access_enabled",
+  "log_access_for_guest",
   "type_of_requests_to_log",
   "skip_regex_for_access_log",
   "section_break_frdu",
@@ -105,12 +106,20 @@
    "fieldname": "type_of_requests_to_log",
    "fieldtype": "Data",
    "label": "Type of requests to log"
+  },
+  {
+   "default": "0",
+   "depends_on": "log_access_enabled",
+   "description": "Enabling this will log access even if User is not logged in",
+   "fieldname": "log_access_for_guest",
+   "fieldtype": "Check",
+   "label": "Log Access for Guest Users"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2025-12-01 05:18:08.218736",
+ "modified": "2025-12-19 00:44:35.753531",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream Settings",
