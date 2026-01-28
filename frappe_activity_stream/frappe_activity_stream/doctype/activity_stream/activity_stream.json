@@ -40,7 +40,7 @@
    "fieldname": "action",
    "fieldtype": "Select",
    "label": "Action",
-   "options": "\nAccess\nCreate\nUpdate\nDelete\nLogin\nLogout\nSubmit\nCancel",
+   "options": "\nAccess\nCreate\nUpdate\nDelete\nLogin\nLogout\nImpersonate\nSubmit\nCancel",
    "read_only": 1
   },
   {

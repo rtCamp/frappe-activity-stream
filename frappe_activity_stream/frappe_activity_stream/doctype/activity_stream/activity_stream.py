@@ -429,3 +429,49 @@ def log_logout(login_manager):
         frappe.log_error(
             frappe.get_traceback(), f"Error logging logout activity for {user}"
         )
+
+
+def activity_log_after_insert(doc, method):
+    # Check if Impersonate log is inserted, if yes, log the impersonation activity in Activity Stream
+    if doc.operation == "Impersonate":
+        log_impersonate(doc.user)
+
+
+def log_impersonate(user):
+    try:
+        ip_address = get_ip_address()
+        if not should_log_activity("User", "Impersonate", user, ip_address):
+            return
+
+        impersonator = frappe.session.user
+
+        event_origin, path, args, method, referrer = get_event_details()
+
+        reason = args.get("reason", None)
+
+        activity = frappe.get_doc(
+            {
+                "owner": impersonator,
+                "doctype": "Activity Stream",
+                "user": impersonator,
+                "action": "Impersonate",
+                "ip_address": ip_address,
+                "datetime": frappe.utils.now_datetime(),
+                "summary": f"User {impersonator} impersonated user {user}."
+                + (f" Reason: {reason}" if reason else ""),
+                "document_type": "User",
+                "document_name": user,
+                "event_origin": event_origin,
+                "method": path,
+                "type": method,
+                "referrer": referrer,
+                "args": json.dumps(args, indent=4),
+            }
+        )
+        # before deferred_insert, run before_insert hooks
+        activity.run_method("before_insert")
+        activity.deferred_insert()
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(), f"Error logging impersonation activity for {user}"
+        )
