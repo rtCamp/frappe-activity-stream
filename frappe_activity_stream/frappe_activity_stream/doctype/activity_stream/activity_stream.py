@@ -229,7 +229,7 @@ def log_access():
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4),
+                "args": json.dumps(args, indent=4,default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -324,7 +324,7 @@ def log_event(doc, action):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4),
+                "args": json.dumps(args, indent=4,default=str),
                 "diff": frappe.as_json(diff, indent=None, separators=(",", ":"))
                 if diff
                 else None,
@@ -383,7 +383,7 @@ def log_login(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4),
+                "args": json.dumps(args, indent=4,default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -419,7 +419,7 @@ def log_logout(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4),
+                "args": json.dumps(args, indent=4,default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -465,7 +465,7 @@ def log_impersonate(user):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4),
+                "args": json.dumps(args, indent=4,default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
