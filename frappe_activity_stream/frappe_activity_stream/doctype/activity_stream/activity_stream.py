@@ -4,8 +4,10 @@
 import json
 
 import frappe
-from frappe.core.doctype.version.version import get_diff
+from frappe.core.doctype.version.version import FIELDTYPES_TO_IGNORE
+from frappe.model import datetime_fields, table_fields
 from frappe.model.document import Document
+from frappe.utils import cstr
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     get_settings_cached,
@@ -229,7 +231,7 @@ def log_access():
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -324,10 +326,12 @@ def log_event(doc, action):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
-                "diff": frappe.as_json(diff, indent=None, separators=(",", ":"))
-                if diff
-                else None,
+                "args": json.dumps(args, indent=4, default=str),
+                "diff": (
+                    frappe.as_json(diff, indent=None, separators=(",", ":"))
+                    if diff
+                    else None
+                ),
             }
         )
         activity.summary = generate_summary(activity, is_single)
@@ -383,7 +387,7 @@ def log_login(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -419,7 +423,7 @@ def log_logout(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -465,7 +469,7 @@ def log_impersonate(user):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -475,3 +479,141 @@ def log_impersonate(user):
         frappe.log_error(
             frappe.get_traceback(), f"Error logging impersonation activity for {user}"
         )
+
+
+def get_diff(old, new, for_child=False, compare_cancelled=False):
+    """Get diff between 2 document objects
+
+    If there is a change, then returns a dict like:
+
+            {
+                    "changed"    : [[fieldname1, old, new], [fieldname2, old, new]],
+                    "added"      : [[table_fieldname1, {dict}], ],
+                    "removed"    : [[table_fieldname1, {dict}], ],
+                    "row_changed": [[table_fieldname1, row_name1, row_index,
+                            [[child_fieldname1, old, new],
+                            [child_fieldname2, old, new]], ]
+                    ],
+
+            }
+
+    This is based on Frappe's default get_diff implementation.
+    For Link title lookups, it uses `ignore_ifnull=True` to avoid generating
+    `COALESCE(name, '')` in the SQL filter on `name`.
+    """
+    if not new:
+        return None
+
+    blacklisted_fields = ["Markdown Editor", "Text Editor", "Code", "HTML Editor"]
+
+    # Capture import metadata flags when present.
+    data_import = new.flags.via_data_import
+    updater_reference = new.flags.updater_reference
+
+    out = frappe._dict(
+        changed=[],
+        added=[],
+        removed=[],
+        row_changed=[],
+        data_import=data_import,
+        updater_reference=updater_reference,
+    )
+
+    if not for_child:
+        amended_from = new.get("amended_from")
+        old_row_name_field = (
+            "_amended_from" if (amended_from and amended_from == old.name) else "name"
+        )
+
+    for df in new.meta.fields:
+        if df.fieldtype in FIELDTYPES_TO_IGNORE or getattr(df, "is_virtual", False):
+            continue
+
+        old_value, new_value = old.get(df.fieldname), new.get(df.fieldname)
+        if df.fieldtype in ("Link", "Dynamic Link"):
+            old_value, new_value = cstr(old_value), cstr(new_value)
+
+        if df.fieldtype in datetime_fields:
+            if old_value is None and new_value == "":
+                new_value = None
+
+        if not for_child and df.fieldtype in table_fields:
+            old_rows_by_name = {}
+            for d in old_value:
+                old_rows_by_name[d.name] = d
+
+            found_rows = set()
+
+            # check rows for additions, changes
+            for i, d in enumerate(new_value):
+                old_row_name = getattr(d, old_row_name_field, None)
+                if compare_cancelled:
+                    if amended_from:
+                        if len(old_value) > i:
+                            old_row_name = old_value[i].name
+
+                if old_row_name and old_row_name in old_rows_by_name:
+                    found_rows.add(old_row_name)
+
+                    diff = get_diff(old_rows_by_name[old_row_name], d, for_child=True)
+                    if diff and diff.changed:
+                        out.row_changed.append((df.fieldname, i, d.name, diff.changed))
+                else:
+                    out.added.append([df.fieldname, d.as_dict()])
+
+            # check for deletions
+            for d in old_value:
+                if d.name not in found_rows:
+                    out.removed.append([df.fieldname, d.as_dict()])
+
+        elif old_value != new_value:
+            if df.fieldtype not in blacklisted_fields:
+                old_value = old.get_formatted(df.fieldname) if old_value else old_value
+                new_value = new.get_formatted(df.fieldname) if new_value else new_value
+
+            if old_value != new_value:
+                doctype = new.doctype or old.doctype
+                if doctype:
+                    meta = frappe.get_meta(doctype)
+
+                    if (
+                        field_meta := meta.get_field(df.fieldname)
+                    ) and field_meta.fieldtype == "Link":
+                        link_meta = frappe.get_meta(field_meta.options)
+
+                        # Show title field value if field is Link and show_title_field_in_link is True
+                        if link_meta.show_title_field_in_link and (
+                            (title_field := link_meta.get_title_field()) != "name"
+                        ):
+                            old_title_val, new_title_val = "", ""
+                            result = frappe.db.get_values(
+                                field_meta.options,
+                                {"name": ("in", (old_value, new_value))},
+                                ["name", title_field],
+                                ignore_ifnull=True,
+                            )
+                            for r in result:
+                                if r[0] == old_value:
+                                    old_title_val = r[1]
+                                elif r[0] == new_value:
+                                    new_title_val = r[1]
+                            out.changed.append(
+                                (df.fieldname, old_title_val, new_title_val)
+                            )
+                            continue
+                out.changed.append((df.fieldname, old_value, new_value))
+
+    # name & docstatus
+    if not for_child:
+        for key in ("name", "docstatus"):
+            old_value = getattr(old, key)
+            new_value = getattr(new, key)
+
+            if old_value != new_value:
+                out.changed.append([key, old_value, new_value])
+
+    if any((out.changed, out.added, out.removed, out.row_changed)):
+        return out
+
+    else:
+        return None
