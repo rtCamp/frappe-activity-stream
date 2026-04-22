@@ -242,7 +242,15 @@ def log_access():
 
 
 def log_event(doc, action):
+    # Guard against recursive logging (e.g. Error Log inserts triggering log_create again)
+    # Use frappe.local so the flag is per-request/thread, not global
+    if getattr(frappe.local, "_activity_stream_logging", False):
+        return
+    # Never log Activity Stream or Error Log to avoid infinite recursion
+    if doc.doctype in ("Activity Stream", "Error Log"):
+        return
     try:
+        frappe.local._activity_stream_logging = True
         user = frappe.session.user
         ip_address = get_ip_address()
         if not should_log_activity(doc.doctype, action, user, ip_address):
@@ -335,9 +343,12 @@ def log_event(doc, action):
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"Error logging activity: {action} on {doc}"
+        # Use frappe.logger instead of frappe.log_error to avoid recursive inserts
+        frappe.logger("activity_stream").error(
+            f"Error logging activity: {action} on {doc}\n{frappe.get_traceback()}"
         )
+    finally:
+        frappe.local._activity_stream_logging = False
 
 
 def log_create(doc, method):
