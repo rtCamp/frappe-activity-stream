@@ -343,9 +343,8 @@ def log_event(doc, action):
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        # Use frappe.logger instead of frappe.log_error to avoid recursive inserts
-        frappe.logger("activity_stream").error(
-            f"Error logging activity: {action} on {doc}\n{frappe.get_traceback()}"
+        frappe.log_error(
+            frappe.get_traceback(), f"Error logging activity: {action} on {doc}"
         )
     finally:
         frappe.local._activity_stream_logging = False
