@@ -229,7 +229,7 @@ def log_access():
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
@@ -332,16 +332,20 @@ def log_event(doc, action):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
                 "diff": frappe.as_json(diff, indent=None, separators=(",", ":"))
                 if diff
                 else None,
             }
         )
         activity.summary = generate_summary(activity, is_single)
-        # before deferred_insert, run before_insert hooks
-        activity.run_method("before_insert")
-        activity.deferred_insert()
+        # Synchronous insert so events are visible immediately after the triggering save.
+        # Previously used activity.deferred_insert() which batches writes to Redis and
+        # flushes every 15 min via frappe.deferred_insert.save_to_db — causing up to
+        # 15-minute delays before events appeared in the activity feed.
+        # activity.run_method("before_insert")
+        # activity.deferred_insert()
+        activity.insert(ignore_permissions=True)
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging activity: {action} on {doc}"
@@ -393,12 +397,12 @@ def log_login(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
-        # before deferred_insert, run before_insert hooks
-        activity.run_method("before_insert")
-        activity.deferred_insert()
+        # activity.run_method("before_insert")
+        # activity.deferred_insert()
+        activity.insert(ignore_permissions=True)
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging login activity for {user}"
@@ -429,12 +433,12 @@ def log_logout(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
-        # before deferred_insert, run before_insert hooks
-        activity.run_method("before_insert")
-        activity.deferred_insert()
+        # activity.run_method("before_insert")
+        # activity.deferred_insert()
+        activity.insert(ignore_permissions=True)
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging logout activity for {user}"
@@ -475,12 +479,12 @@ def log_impersonate(user):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
-        # before deferred_insert, run before_insert hooks
-        activity.run_method("before_insert")
-        activity.deferred_insert()
+        # activity.run_method("before_insert")
+        # activity.deferred_insert()
+        activity.insert(ignore_permissions=True)
     except Exception:
         frappe.log_error(
             frappe.get_traceback(), f"Error logging impersonation activity for {user}"
