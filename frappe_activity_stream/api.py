@@ -272,10 +272,14 @@ def get_activities(
     ]
 
     if or_filters:
-        # frappe.db.count does not support or_filters; count via get_all.
-        total_count = len(
-            frappe.get_all("Activity", filters=filters, or_filters=or_filters, pluck="name")
+        count_row = frappe.get_all(
+            "Activity",
+            filters=filters,
+            or_filters=or_filters,
+            fields=["count(*) as total"],
+            limit=0,
         )
+        total_count = (count_row[0].get("total") if count_row else 0) or 0
     else:
         total_count = frappe.db.count("Activity", filters=filters)
 
