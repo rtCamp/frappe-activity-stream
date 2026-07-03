@@ -10,7 +10,7 @@ def clear_old_records():
         return
     cutoff_date = frappe.utils.add_days(frappe.utils.now_datetime(), -max_age_days)
     frappe.db.delete(
-        "Activity Stream",
+        "Activity",
         filters={"datetime": ("<", cutoff_date)},
     )
     frappe.db.commit()  # nosemgrep

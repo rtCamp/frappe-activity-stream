@@ -5,26 +5,24 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "general_tab",
   "enabled",
   "general_section",
   "keep_records_indefinitely",
   "keep_records_for",
-  "log_access_section",
-  "log_access_enabled",
-  "log_access_for_guest",
-  "type_of_requests_to_log",
-  "skip_regex_for_access_log",
   "section_break_frdu",
-  "sensitive_keys",
-  "rules_tab",
-  "include_list_section",
-  "doctype_and_action"
+  "sensitive_keys"
  ],
  "fields": [
   {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
    "fieldname": "general_section",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Retention"
   },
   {
    "default": "0",
@@ -33,7 +31,7 @@
    "label": "Keep Records Indefinitely"
   },
   {
-   "default": "120",
+   "default": "90",
    "depends_on": "eval:!doc.keep_records_indefinitely",
    "description": "Maximum number of days to keep activity records.",
    "fieldname": "keep_records_for",
@@ -44,82 +42,22 @@
    "non_negative": 1
   },
   {
-   "fieldname": "include_list_section",
-   "fieldtype": "Section Break",
-   "label": "Include List"
-  },
-  {
-   "fieldname": "doctype_and_action",
-   "fieldtype": "Table",
-   "label": "DocType and Action",
-   "options": "Activity Stream Doctypes"
-  },
-  {
-   "fieldname": "general_tab",
-   "fieldtype": "Tab Break",
-   "label": "General"
-  },
-  {
-   "fieldname": "rules_tab",
-   "fieldtype": "Tab Break",
-   "label": "Rules"
-  },
-  {
-   "default": "0",
-   "fieldname": "enabled",
-   "fieldtype": "Check",
-   "label": "Enabled"
-  },
-  {
    "fieldname": "section_break_frdu",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Privacy"
   },
   {
    "default": "pwd, password, secret, token, api_key, access_token",
-   "description": "Separated by <b><code>,</code></b> (Comma). These keys in args or changed values will be masked.\n<br>\nThese keys will always be replaced: <code>pwd</code>, <code>password</code>, <code>secret</code>, <code>token</code>, <code>api_key</code>, <code>access_token</code>",
+   "description": "Separated by <b><code>,</code></b> (Comma). These keys in the activity <code>meta</code> payload will be masked.",
    "fieldname": "sensitive_keys",
    "fieldtype": "Small Text",
    "label": "Sensitive Keys"
-  },
-  {
-   "fieldname": "log_access_section",
-   "fieldtype": "Section Break",
-   "label": "Log Access"
-  },
-  {
-   "default": "0",
-   "fieldname": "log_access_enabled",
-   "fieldtype": "Check",
-   "label": "Enable logging access"
-  },
-  {
-   "default": "(js|css)$",
-   "depends_on": "log_access_enabled",
-   "description": "Newline Seperated list of regex",
-   "fieldname": "skip_regex_for_access_log",
-   "fieldtype": "Text",
-   "label": "Skip Regex"
-  },
-  {
-   "depends_on": "log_access_enabled",
-   "description": "e.g. <code>GET,POST,PUT,DELETE</code>. Leave blank to log all type of requests. ",
-   "fieldname": "type_of_requests_to_log",
-   "fieldtype": "Data",
-   "label": "Type of requests to log"
-  },
-  {
-   "default": "0",
-   "depends_on": "log_access_enabled",
-   "description": "Enabling this will log access even if User is not logged in",
-   "fieldname": "log_access_for_guest",
-   "fieldtype": "Check",
-   "label": "Log Access for Guest Users"
   }
  ],
- "index_web_pages_for_search": 1,
+ "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2025-12-19 00:44:35.753531",
+ "modified": "2026-07-02 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream Settings",

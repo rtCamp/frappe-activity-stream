@@ -137,24 +137,15 @@ app_license = "agpl-3.0"
 # ---------------
 # Hook on document methods and events
 
+# Activity is captured by explicit `log_activity()` calls at business action
+# sites in producer apps (see implementation plan). The engine does NOT hook
+# every doctype write anymore — that firehose was the source of both the
+# ~15-min lag and the missing db_set coverage.
 doc_events = {
-    "*": {
-        "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_update",
-        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_create",
-        "on_trash": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_delete",
-        "on_submit": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_submit",
-        "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel",
-    },
     "Activity Stream Settings": {
         "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings.invalidate_settings_cache"
     },
-    "Activity Log": {
-        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.activity_log_after_insert"
-    },
 }
-
-on_login = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_login"
-on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_logout"
 
 # Scheduled Tasks
 # ---------------
@@ -189,14 +180,12 @@ scheduler_events = {
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-ignore_links_on_delete = ["Activity Stream"]
+ignore_links_on_delete = ["Activity"]
 
 # Request Events
 # ----------------
-before_request = [
-    "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_access"
-]
-# after_request = ["frappe_activity_stream.utils.after_request"]
+# No before_request access logging — the old per-request access firehose is
+# removed. Access/auth events (login/logout/impersonate) are Phase 3, opt-in.
 
 # Job Events
 # ----------
