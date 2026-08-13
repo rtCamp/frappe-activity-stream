@@ -11,6 +11,7 @@ implementation plan, section 6.1.
 import json
 
 import frappe
+from frappe.query_builder.functions import Count
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     get_settings_cached,
@@ -63,6 +64,7 @@ def _resolve_organization() -> str | None:
 
 
 def _mask_sensitive(meta: dict | None) -> dict | None:
+    """Mask sensitive keys anywhere in the meta payload (nested dicts/lists included)."""
     if not meta or not isinstance(meta, dict):
         return meta
     try:
@@ -71,7 +73,15 @@ def _mask_sensitive(meta: dict | None) -> dict | None:
         sensitive = set()
     if not sensitive:
         return meta
-    return {k: ("*****" if k in sensitive else v) for k, v in meta.items()}
+    return _mask_value(meta, sensitive)
+
+
+def _mask_value(value, sensitive: set):
+    if isinstance(value, dict):
+        return {k: ("*****" if k in sensitive else _mask_value(v, sensitive)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_mask_value(item, sensitive) for item in value]
+    return value
 
 
 def log_activity(
@@ -214,6 +224,38 @@ def _resolve_actor(actor: str | None) -> tuple[str | None, str | None]:
     return (row.full_name or actor, row.user_image)
 
 
+def _count_with_or_filters(filters: list, or_filters: list) -> int:
+    """DB-side COUNT for a filters + OR-filters query.
+
+    `frappe.db.count` does not support or_filters, and passing an aggregate through
+    `get_all(fields=...)` is not portable: the raw "count(*) as total" string is
+    rejected on v16, while the v16 dict spec ({"COUNT": "*"}) is rejected on v15.
+    Query Builder works on both, and keeps this a single scalar row instead of
+    materializing every matching name (which would be O(n) for the feed).
+    """
+    activity = frappe.qb.DocType("Activity")
+    query = frappe.qb.from_(activity).select(Count("*").as_("total"))
+
+    for fieldname, operator, value in filters:
+        column = activity[fieldname]
+        if operator == ">=":
+            query = query.where(column >= value)
+        elif operator == "<=":
+            query = query.where(column <= value)
+        else:
+            query = query.where(column == value)
+
+    or_condition = None
+    for fieldname, _operator, value in or_filters:
+        clause = activity[fieldname].like(value)
+        or_condition = clause if or_condition is None else (or_condition | clause)
+    if or_condition is not None:
+        query = query.where(or_condition)
+
+    result = query.run(as_dict=True)
+    return (result[0].get("total") if result else 0) or 0
+
+
 def get_activities(
     organization: str,
     *,
@@ -228,7 +270,14 @@ def get_activities(
     order: str = "desc",
 ) -> dict:
     """Pure org-scoped query. No permission logic — callers must gate access
-    (the whitelisted producer wrapper enforces Owner/Manager)."""
+    (the whitelisted producer wrapper enforces Owner/Manager).
+
+    NOTE: the reads below intentionally use `frappe.get_all`, which bypasses doctype
+    permissions. That is deliberate: the `Activity` doctype grants read only to System
+    Manager, but the feed must be readable by ordinary org Owners/Managers, who are
+    authorized by the calling wrapper instead. Do not "fix" this by adding permission
+    checks here — it would break the feed for every non-System-Manager user.
+    """
     page = max(int(page), 1)
     page_size = min(max(int(page_size), 1), 100)
     order = "asc" if str(order).lower() == "asc" else "desc"
@@ -272,14 +321,7 @@ def get_activities(
     ]
 
     if or_filters:
-        count_row = frappe.get_all(
-            "Activity",
-            filters=filters,
-            or_filters=or_filters,
-            fields=["count(*) as total"],
-            limit=0,
-        )
-        total_count = (count_row[0].get("total") if count_row else 0) or 0
+        total_count = _count_with_or_filters(filters, or_filters)
     else:
         total_count = frappe.db.count("Activity", filters=filters)
 
