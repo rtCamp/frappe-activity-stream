@@ -154,9 +154,7 @@ def _log_activity_bg(**kwargs) -> None:
     try:
         _insert_activity(**kwargs)
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"log_activity (bg) failed: {kwargs.get('event_type')}"
-        )
+        frappe.log_error(frappe.get_traceback(), f"log_activity (bg) failed: {kwargs.get('event_type')}")
 
 
 def _insert_activity(
@@ -353,3 +351,77 @@ def get_available_action_groups(organization: str) -> list:
         pluck="action_group",
     )
     return sorted([r for r in rows if r])
+
+
+# Remap batching. Bounds how long one statement holds row locks and how much undo a
+# single transaction accumulates, so a rename on a large org cannot lock out concurrent
+# activity logging. MAX_BATCHES is a runaway guard, not an expected limit.
+REMAP_BATCH_SIZE = 5000
+REMAP_MAX_BATCHES = 400
+
+
+def remap_organization(old_name: str, new_name: str, *, commit_between_batches: bool = False) -> int:
+    """Repoint existing activity rows at an organization that was renamed.
+
+    `Activity.organization` is a **Data** column, not a Link — deliberately, so the engine
+    carries no dependency on any producer app's organization doctype. The price is that
+    Frappe's rename cascade (which only rewrites Link fields) never reaches it: after a
+    rename the feed filters on the new name, matches nothing, and looks as though every
+    past activity was wiped. This rewrites the stored name so the history survives.
+
+    Driven entirely off `organization`, which is indexed twice (its own index plus the
+    leading column of `org_datetime`). `target_name` / `target_label` are folded into the
+    same statement rather than a second pass: they are NOT indexed, so filtering on them
+    would full-scan every tenant's rows and take row locks across the whole table. The one
+    case that costs us is a row whose target is this organization but whose `organization`
+    is NULL (org resolution failed at log time) — already invisible in the feed anyway.
+
+    `commit_between_batches` must stay False while a transaction is still open that the
+    caller may need to roll back — notably inside an `after_rename` doc event, where
+    `rename_doc` has work left to do and a commit would make a partial rename durable.
+    Callers that run after the rename has committed (see the producer-side shim, which
+    defers via `frappe.db.after_commit`) pass True so lock hold time stays bounded.
+
+    Returns the number of rows updated. Never raises.
+    """
+    if not old_name or not new_name or old_name == new_name:
+        return 0
+
+    try:
+        updated = 0
+        for _ in range(REMAP_MAX_BATCHES):
+            remaining = frappe.db.count("Activity", {"organization": old_name})
+            if not remaining:
+                break
+
+            # Self-consuming loop: each pass moves up to REMAP_BATCH_SIZE rows off
+            # `old_name`, so the next count shrinks by that much.
+            frappe.db.sql(
+                """UPDATE `tabActivity`
+                   SET `organization` = %(new)s,
+                       `target_name` = CASE
+                           WHEN `target_doctype` = 'Organization' AND `target_name` = %(old)s
+                           THEN %(new)s ELSE `target_name` END,
+                       `target_label` = CASE
+                           WHEN `target_doctype` = 'Organization' AND `target_label` = %(old)s
+                           THEN %(new)s ELSE `target_label` END
+                   WHERE `organization` = %(old)s
+                   LIMIT %(limit)s""",
+                {"old": old_name, "new": new_name, "limit": REMAP_BATCH_SIZE},
+            )
+            updated += min(remaining, REMAP_BATCH_SIZE)
+
+            if commit_between_batches:
+                frappe.db.commit()  # nosemgrep
+        else:
+            frappe.log_error(
+                f"activity remap_organization hit the batch ceiling with rows still on "
+                f"'{old_name}'; re-run remap_organization('{old_name}', '{new_name}')",
+                "activity remap incomplete",
+            )
+
+        return updated
+    except Exception:
+        # A failed remap must never break the rename itself.
+        frappe.log_error(frappe.get_traceback(), f"activity remap_organization failed: {old_name} -> {new_name}")
+        return 0
