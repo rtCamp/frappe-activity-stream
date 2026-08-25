@@ -327,6 +327,37 @@ def get_available_actions(organization: str) -> list:
     return sorted({row.action_group for row in rows if row.action_group})
 
 
+def flush_pending_activity(max_rounds: int = 20) -> None:
+    """Drain the deferred-insert queue for Activity Stream.
+
+    Rows are written with `deferred_insert`, so they sit in Redis until Frappe's
+    `frappe.deferred_insert.save_to_db` cron drains them (every 15 minutes). Anything
+    still queued is invisible to a table UPDATE, which matters for
+    `remap_organization`: a queued row still carrying the old organization name would be
+    inserted *after* the remap ran and would then be orphaned permanently, with no later
+    pass to catch it. Draining first closes that window.
+
+    `save_to_db` handles at most 500 records per doctype per call, hence the loop. It
+    drains other doctypes' queues too, which is exactly what the cron does anyway.
+
+    Never raises: this runs after the rename has already committed.
+    """
+    try:
+        from frappe.deferred_insert import queue_prefix, save_to_db
+    except Exception:
+        return
+
+    key = f"{queue_prefix}Activity Stream"
+    for _ in range(max_rounds):
+        try:
+            if not frappe.cache.llen(key):
+                return
+            save_to_db()
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "activity flush_pending_activity failed")
+            return
+
+
 def remap_organization(old_name: str, new_name: str, *, commit_between_batches: bool = False) -> int:
     """Repoint existing activity rows at an organization that was renamed.
 
