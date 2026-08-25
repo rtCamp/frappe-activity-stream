@@ -1,0 +1,222 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2025-08-27 15:44:11.286551",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "user",
+  "action",
+  "summary",
+  "organization",
+  "event_type",
+  "action_group",
+  "column_break_whrw",
+  "user_name",
+  "datetime",
+  "document_type",
+  "document_name",
+  "origin_details_section",
+  "ip_address",
+  "column_break_nqxz",
+  "event_origin",
+  "method",
+  "type",
+  "referrer",
+  "args",
+  "data_section",
+  "diff",
+  "diff_visual"
+ ],
+ "fields": [
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "User",
+   "options": "User",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "action",
+   "fieldtype": "Select",
+   "label": "Action",
+   "options": "\nAccess\nCreate\nUpdate\nDelete\nLogin\nLogout\nImpersonate\nSubmit\nCancel",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_whrw",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "datetime",
+   "fieldtype": "Datetime",
+   "label": "Datetime",
+   "read_only": 1
+  },
+  {
+   "fieldname": "document_type",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Document Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "document_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Document Name",
+   "options": "document_type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "summary",
+   "fieldtype": "Small Text",
+   "label": "Summary",
+   "read_only": 1
+  },
+  {
+   "fieldname": "origin_details_section",
+   "fieldtype": "Section Break",
+   "label": "Origin Details"
+  },
+  {
+   "fieldname": "ip_address",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "IP Address",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_nqxz",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "event_origin",
+   "fieldtype": "Select",
+   "label": "Event Origin",
+   "options": "\nDesk\nAPI Call\nBackground Job\nWordPress\nSystem",
+   "read_only": 1
+  },
+  {
+   "fetch_from": "user.full_name",
+   "fieldname": "user_name",
+   "fieldtype": "Data",
+   "label": "User Name",
+   "read_only": 1
+  },
+  {
+   "depends_on": "diff",
+   "fieldname": "data_section",
+   "fieldtype": "Section Break",
+   "label": "Data"
+  },
+  {
+   "fieldname": "diff",
+   "fieldtype": "JSON",
+   "hidden": 1,
+   "label": "Diff",
+   "read_only": 1
+  },
+  {
+   "fieldname": "diff_visual",
+   "fieldtype": "HTML",
+   "label": "Diff Visual",
+   "read_only": 1
+  },
+  {
+   "fieldname": "method",
+   "fieldtype": "Data",
+   "label": "Method / Path",
+   "read_only": 1
+  },
+  {
+   "fieldname": "args",
+   "fieldtype": "JSON",
+   "label": "Args",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.event_origin===\"API Call\"||doc.event_origin===\"Desk\";",
+   "fieldname": "type",
+   "fieldtype": "Data",
+   "label": "Type",
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.event_origin===\"API Call\"||doc.event_origin===\"Desk\";",
+   "fieldname": "referrer",
+   "fieldtype": "Text",
+   "label": "Referrer",
+   "read_only": 1
+  },
+  {
+   "fieldname": "organization",
+   "fieldtype": "Data",
+   "label": "Organization",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Owning organization, resolved by the producer app's activity_org_resolver hook."
+  },
+  {
+   "fieldname": "event_type",
+   "fieldtype": "Data",
+   "label": "Event Type",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Semantic event name for explicitly logged events (e.g. media.archived). Empty for events captured from document hooks."
+  },
+  {
+   "fieldname": "action_group",
+   "fieldtype": "Select",
+   "label": "Action Group",
+   "options": "\nMedia\nContent\nComment\nMembership\nOrganization\nBilling\nAccount\nAuth\nOther",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Business grouping used by the activity feed filter. Set explicitly when logging, or derived per doctype by the producer app's activity_action_group hook."
+  }
+ ],
+ "in_create": 1,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-01-25 11:28:10.702070",
+ "modified_by": "Administrator",
+ "module": "Frappe Activity Stream",
+ "name": "Activity Stream",
+ "naming_rule": "Random",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "select": 1,
+   "share": 1
+  },
+  {
+   "email": 1,
+   "export": 1,
+   "if_owner": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Desk User",
+   "select": 1,
+   "share": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "show_title_field_in_link": 1,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "summary"
+}

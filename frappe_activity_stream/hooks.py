@@ -137,15 +137,41 @@ app_license = "agpl-3.0"
 # ---------------
 # Hook on document methods and events
 
-# Activity is captured by explicit `log_activity()` calls at business action
-# sites in producer apps (see implementation plan). The engine does NOT hook
-# every doctype write anymore — that firehose was the source of both the
-# ~15-min lag and the missing db_set coverage.
+# Activity is captured from the document lifecycle. Which doctypes actually get
+# logged is controlled by the allow-list in Activity Stream Settings
+# (`doctype_and_action`): `should_log_activity` returns False for anything not
+# listed, so this wildcard is a capability, not a firehose. Writes that bypass the
+# lifecycle (`db.set_value`, `db.sql`, `db.delete`) fire no document event at all
+# and are the only case where a producer app calls `api.log_activity()` directly.
 doc_events = {
+    "*": {
+        "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_update",
+        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_create",
+        "on_trash": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_delete",
+        "on_submit": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_submit",
+        "on_cancel": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_cancel",
+    },
     "Activity Stream Settings": {
         "on_update": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings.invalidate_settings_cache"
     },
+    "Activity Log": {
+        "after_insert": "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.activity_log_after_insert"
+    },
 }
+
+on_login = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_login"
+on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_logout"
+
+# Producer-app extension points
+# ----------------------------
+# `activity_org_resolver`: which organization an event belongs to. The engine has no
+# concept of one; a producer app answers, receiving the document when there is one.
+#
+# `activity_summary_formatter`: rewrite the auto-generated summary per doctype, so a
+# generic "user updated Transcoder Job abc" can become "Archived media Foo.mp4"
+# without the engine knowing what media is. Declared by producer apps as
+# {"<DocType>": "path.to.formatter", "*": "path.to.fallback"}; see
+# `activity_stream.apply_summary_filter`.
 
 # Scheduled Tasks
 # ---------------
@@ -180,12 +206,16 @@ scheduler_events = {
 # Ignore links to specified DocTypes when deleting documents
 # -----------------------------------------------------------
 
-ignore_links_on_delete = ["Activity"]
+ignore_links_on_delete = ["Activity Stream"]
 
 # Request Events
 # ----------------
-# No before_request access logging — the old per-request access firehose is
-# removed. Access/auth events (login/logout/impersonate) are Phase 3, opt-in.
+# Access logging is gated by `log_access_enabled` in Activity Stream Settings, and
+# separately by `log_access_for_guest` / `skip_regex_for_access_log`.
+
+before_request = [
+    "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_access"
+]
 
 # Job Events
 # ----------

@@ -1,8 +1,9 @@
-# Copyright (c) 2026, rtCamp and contributors
+# Copyright (c) 2025, rtCamp and contributors
 # For license information, please see license.txt
 
+# import frappe
 from frappe.model.document import Document
 
 
-class Activity(Document):
+class ActivityStreamDoctypes(Document):
     pass

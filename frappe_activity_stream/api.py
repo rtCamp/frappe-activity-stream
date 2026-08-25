@@ -1,11 +1,25 @@
 # Copyright (c) 2026, rtCamp and contributors
 # For license information, please see license.txt
-"""Public engine API for the Activity feed.
+"""Public engine API.
 
-Producer apps should NOT import this module directly. They should ship a thin
-local shim that lazily + defensively imports `log_activity` so that a missing
-`frappe_activity_stream` install never breaks the primary action. See the
-implementation plan, section 6.1.
+Activity is captured two ways, and the split matters:
+
+1. **Document hooks** (`doc_events` in hooks.py) capture anything that goes through
+   the document lifecycle: `doc.insert()`, `doc.save()`, `doc.delete()`. This is the
+   default and covers most business actions for free. Which doctypes are captured is
+   controlled by the allow-list in **Activity Stream Settings** (`doctype_and_action`);
+   nothing is logged for a doctype that is not listed.
+
+2. **`log_activity()` below**, for writes that bypass the lifecycle entirely:
+   `frappe.db.set_value`, `frappe.db.sql`, `frappe.db.delete`. No document hook fires
+   for those, so the producer app has to say what happened itself.
+
+Producer apps should NOT import this module directly. They ship a thin local shim that
+imports it lazily and defensively, so that a missing `frappe_activity_stream` install
+can never break the action being logged.
+
+Rows land in the **Activity Stream** doctype. Everything here maps onto its existing
+fields; `organization` and `event_type` are the only additions.
 """
 
 import json
@@ -13,58 +27,45 @@ import json
 import frappe
 from frappe.query_builder.functions import Count
 
+from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream import (
+    get_event_details,
+)
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     get_settings_cached,
 )
+from frappe_activity_stream.utils import get_ip_address
 
-ACTION_GROUPS = {
-    "Media",
-    "Content",
-    "Comment",
-    "Membership",
-    "Organization",
-    "Billing",
-    "Account",
-    "Auth",
-    "Other",
-}
-
-
-def _resolve_source() -> str:
-    """Best-effort classification of where the event originated."""
-    request = getattr(frappe.local, "request", None)
-    if request is not None:
-        path = getattr(request, "path", "") or ""
-        if path.startswith("/app/") or path.startswith("/desk/"):
-            return "Desk"
-        if path.startswith("/api/"):
-            return "API"
-        return "API"
-    if getattr(frappe.local, "job", None):
-        return "Background Job"
-    return "System"
+# `action` on Activity Stream is a fixed Select, so an explicitly logged event still has
+# to land on one of its values while the semantic name travels in `event_type`
+# (action="Delete", event_type="media.deleted"). Rather than make every call site repeat
+# that, infer it from the event name and let a caller override when the guess is wrong.
+DEFAULT_ACTION = "Update"
+_ACTION_BY_SUFFIX = (
+    (("deleted", "removed", "disconnected"), "Delete"),
+    (("created", "added", "uploaded", "invited", "connected"), "Create"),
+)
 
 
-def _resolve_organization() -> str | None:
-    """Ask the (optionally) registered producer hook for the current org.
+def _infer_action(event_type: str) -> str:
+    """Map `media.deleted` to "Delete", `post.created` to "Create", else "Update".
 
-    The engine has no knowledge of what an "organization" is; a business app
-    registers `activity_org_resolver` in its hooks.py to supply it. Kept loose
-    (via get_hooks) so the engine never hard-depends on any producer app.
+    Only genuine lifecycle events are mapped. A status flip such as
+    `livestream.started`, `post.unpublished` or `subscription.cancelled` leaves the
+    document in place, so it is an Update however final it reads.
     """
-    methods = frappe.get_hooks("activity_org_resolver") or []
-    for method in methods:
-        try:
-            org = frappe.get_attr(method)()
-            if org:
-                return org
-        except Exception:
-            frappe.log_error(frappe.get_traceback(), "activity_org_resolver failed")
-    return None
+    suffix = (event_type or "").rsplit(".", 1)[-1]
+    for suffixes, action in _ACTION_BY_SUFFIX:
+        if suffix in suffixes:
+            return action
+    return DEFAULT_ACTION
+
+
+REMAP_BATCH_SIZE = 5000
+REMAP_MAX_BATCHES = 400
 
 
 def _mask_sensitive(meta: dict | None) -> dict | None:
-    """Mask sensitive keys anywhere in the meta payload (nested dicts/lists included)."""
+    """Mask sensitive keys anywhere in the payload, including nested dicts and lists."""
     if not meta or not isinstance(meta, dict):
         return meta
     try:
@@ -76,7 +77,7 @@ def _mask_sensitive(meta: dict | None) -> dict | None:
     return _mask_value(meta, sensitive)
 
 
-def _mask_value(value, sensitive: set):
+def _mask_value(value, sensitive):
     if isinstance(value, dict):
         return {k: ("*****" if k in sensitive else _mask_value(v, sensitive)) for k, v in value.items()}
     if isinstance(value, list):
@@ -84,303 +85,263 @@ def _mask_value(value, sensitive: set):
     return value
 
 
+def _resolve_organization(organization: str | None):
+    if organization:
+        return organization
+    for method in frappe.get_hooks("activity_org_resolver") or []:
+        try:
+            org = frappe.get_attr(method)(None)
+            if org:
+                return org
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "activity_org_resolver failed")
+    return None
+
+
 def log_activity(
     event_type: str,
     *,
+    action: str | None = None,
     target_doctype: str | None = None,
     target_name: str | None = None,
-    target_label: str | None = None,
     summary: str | None = None,
     organization: str | None = None,
     actor: str | None = None,
     actor_name: str | None = None,
-    actor_image: str | None = None,
-    meta: dict | None = None,
     action_group: str | None = None,
+    meta: dict | None = None,
     source: str | None = None,
-    enqueue: bool = False,
+    **_ignored,
 ) -> None:
-    """Record one semantic activity event. Never raises."""
-    # Re-entrancy guard: an Activity insert must never trigger more logging.
-    if getattr(frappe.local, "_skip_activity_logging", False):
+    """Record one activity event for a write that no document hook can see.
+
+    Only use this where the write bypasses the document lifecycle (`db.set_value`,
+    `db.sql`, `db.delete`). If the code path calls `doc.save()`, `doc.insert()` or
+    `doc.delete()`, the `doc_events` hooks already capture it and calling this too
+    would log the same action twice; shape the wording with an
+    `activity_summary_formatter` hook instead.
+
+    Unlike hook-captured events this is NOT filtered through the Settings allow-list:
+    the caller has already decided the event is worth recording. Only the global
+    `enabled` switch applies.
+
+    Unknown keyword arguments are accepted and ignored so that a producer app pinned to
+    an older or newer engine cannot break on a signature change.
+
+    Never raises.
+    """
+    if getattr(frappe.local, "_skip_activity_stream_logging", False):
         return
     try:
         settings = get_settings_cached()
         if not getattr(settings, "enabled", 0):
             return
 
+        frappe.local._skip_activity_stream_logging = True
+
         actor = actor or frappe.session.user
-        organization = organization or _resolve_organization()
+        action = action or _infer_action(event_type)
+        origin, path, _request_args, method, referrer = get_event_details()
 
-        if enqueue:
-            frappe.enqueue(
-                "frappe_activity_stream.api._log_activity_bg",
-                queue="short",
-                event_type=event_type,
-                target_doctype=target_doctype,
-                target_name=target_name,
-                target_label=target_label,
-                summary=summary,
-                organization=organization,
-                actor=actor,
-                actor_name=actor_name,
-                actor_image=actor_image,
-                meta=meta,
-                action_group=action_group,
-                source=source or _resolve_source(),
-            )
-            return
-
-        _insert_activity(
-            event_type=event_type,
-            target_doctype=target_doctype,
-            target_name=target_name,
-            target_label=target_label,
-            summary=summary,
-            organization=organization,
-            actor=actor,
-            actor_name=actor_name,
-            actor_image=actor_image,
-            meta=meta,
-            action_group=action_group,
-            source=source or _resolve_source(),
-        )
-    except Exception:
-        # Logging must NEVER break the primary action.
-        frappe.log_error(frappe.get_traceback(), f"log_activity failed: {event_type}")
-
-
-def _log_activity_bg(**kwargs) -> None:
-    try:
-        _insert_activity(**kwargs)
-    except Exception:
-        frappe.log_error(frappe.get_traceback(), f"log_activity (bg) failed: {kwargs.get('event_type')}")
-
-
-def _insert_activity(
-    *,
-    event_type,
-    target_doctype,
-    target_name,
-    target_label,
-    summary,
-    organization,
-    actor,
-    actor_name,
-    actor_image,
-    meta,
-    action_group,
-    source,
-) -> None:
-    if not actor_name or actor_image is None:
-        resolved_name, resolved_image = _resolve_actor(actor)
-        actor_name = actor_name or resolved_name
-        if actor_image is None:
-            actor_image = resolved_image
-
-    if action_group not in ACTION_GROUPS:
-        action_group = "Other"
-
-    meta = _mask_sensitive(meta)
-
-    frappe.local._skip_activity_logging = True
-    try:
-        doc = frappe.get_doc(
+        activity = frappe.get_doc(
             {
-                "doctype": "Activity",
-                "organization": organization,
-                "actor": actor,
-                "actor_name": actor_name,
-                "actor_image": actor_image,
+                "doctype": "Activity Stream",
+                "user": actor,
+                "owner": actor,
+                "user_name": actor_name or frappe.db.get_value("User", actor, "full_name"),
+                "action": action,
                 "event_type": event_type,
                 "action_group": action_group,
-                "summary": summary or event_type,
-                "target_doctype": target_doctype,
-                "target_name": target_name,
-                "target_label": target_label,
-                # NOTE: field is `event_meta`, NOT `meta` — `meta` is a reserved
-                # attribute on Frappe Documents (doc.meta = the DocType meta), so a
-                # field named `meta` never receives its value and the JSON column's
-                # CHECK(json_valid) fails on the resulting empty string.
-                # Always store valid JSON ("{}" minimum) to satisfy the constraint.
-                "event_meta": json.dumps(meta or {}, default=str),
-                "source": source,
+                "organization": _resolve_organization(organization),
+                "summary": summary,
+                "document_type": target_doctype,
+                "document_name": target_name,
                 "datetime": frappe.utils.now_datetime(),
+                "ip_address": get_ip_address(),
+                "event_origin": source or origin,
+                "method": path,
+                "type": method,
+                "referrer": referrer,
+                "args": json.dumps(_mask_sensitive(meta) or {}, default=str),
             }
         )
-        doc.insert(ignore_permissions=True)
+        activity.run_method("before_insert")
+        activity.deferred_insert()
+    except Exception:
+        # Logging must never break the action being logged.
+        frappe.log_error(frappe.get_traceback(), f"log_activity failed: {event_type}")
     finally:
-        frappe.local._skip_activity_logging = False
-
-
-def _resolve_actor(actor: str | None) -> tuple[str | None, str | None]:
-    if not actor or actor == "Guest":
-        return (actor, None)
-    row = frappe.db.get_value("User", actor, ["full_name", "user_image"], as_dict=True)
-    if not row:
-        return (actor, None)
-    return (row.full_name or actor, row.user_image)
+        frappe.local._skip_activity_stream_logging = False
 
 
 def _count_with_or_filters(filters: list, or_filters: list) -> int:
-    """DB-side COUNT for a filters + OR-filters query.
+    """DB-side COUNT for a filters + or_filters query.
 
     `frappe.db.count` does not support or_filters, and passing an aggregate through
     `get_all(fields=...)` is not portable: the raw "count(*) as total" string is
     rejected on v16, while the v16 dict spec ({"COUNT": "*"}) is rejected on v15.
-    Query Builder works on both, and keeps this a single scalar row instead of
-    materializing every matching name (which would be O(n) for the feed).
+    Query Builder works on both.
     """
-    activity = frappe.qb.DocType("Activity")
+    activity = frappe.qb.DocType("Activity Stream")
     query = frappe.qb.from_(activity).select(Count("*").as_("total"))
 
-    for fieldname, operator, value in filters:
-        column = activity[fieldname]
-        if operator == ">=":
-            query = query.where(column >= value)
+    for field, operator, value in filters:
+        if operator == "=":
+            query = query.where(activity[field] == value)
+        elif operator == "like":
+            query = query.where(activity[field].like(value))
+        elif operator == ">=":
+            query = query.where(activity[field] >= value)
         elif operator == "<=":
-            query = query.where(column <= value)
-        else:
-            query = query.where(column == value)
+            query = query.where(activity[field] <= value)
 
-    or_condition = None
-    for fieldname, _operator, value in or_filters:
-        clause = activity[fieldname].like(value)
-        or_condition = clause if or_condition is None else (or_condition | clause)
-    if or_condition is not None:
-        query = query.where(or_condition)
+    if or_filters:
+        condition = None
+        for field, operator, value in or_filters:
+            clause = activity[field].like(value) if operator == "like" else activity[field] == value
+            condition = clause if condition is None else (condition | clause)
+        if condition is not None:
+            query = query.where(condition)
 
     result = query.run(as_dict=True)
-    return (result[0].get("total") if result else 0) or 0
+    return result[0].total if result else 0
 
 
 def get_activities(
     organization: str,
-    *,
     page: int = 1,
     page_size: int = 30,
     search: str = "",
-    event_type: str | None = None,
+    action: str | None = None,
     action_group: str | None = None,
+    event_type: str | None = None,
     actor: str | None = None,
+    order: str = "desc",
     date_from: str | None = None,
     date_to: str | None = None,
-    order: str = "desc",
 ) -> dict:
-    """Pure org-scoped query. No permission logic — callers must gate access
-    (the whitelisted producer wrapper enforces Owner/Manager).
+    """Org-scoped, paginated feed.
 
-    NOTE: the reads below intentionally use `frappe.get_all`, which bypasses doctype
-    permissions. That is deliberate: the `Activity` doctype grants read only to System
-    Manager, but the feed must be readable by ordinary org Owners/Managers, who are
-    authorized by the calling wrapper instead. Do not "fix" this by adding permission
-    checks here — it would break the feed for every non-System-Manager user.
+    Reads `Activity Stream` but returns the field names the consuming UI already uses,
+    so storage details do not leak into the API contract. `action_group` is accepted as
+    an alias for `action` for the same reason.
+
+    Permission is the caller's job: this returns whatever org it is given.
     """
-    page = max(int(page), 1)
-    page_size = min(max(int(page_size), 1), 100)
-    order = "asc" if str(order).lower() == "asc" else "desc"
+    action = action or action_group
 
-    filters = [["organization", "=", organization]]
+    filters = [("organization", "=", organization)]
+    if action:
+        filters.append(("action_group", "=", action))
     if event_type:
-        filters.append(["event_type", "=", event_type])
-    if action_group:
-        filters.append(["action_group", "=", action_group])
+        filters.append(("event_type", "=", event_type))
     if actor:
-        filters.append(["actor", "=", actor])
+        filters.append(("user", "=", actor))
     if date_from:
-        filters.append(["datetime", ">=", date_from])
+        filters.append(("datetime", ">=", date_from))
     if date_to:
-        filters.append(["datetime", "<=", date_to])
+        filters.append(("datetime", "<=", date_to))
 
-    or_filters = None
+    or_filters = []
     if search:
-        like = f"%{search}%"
+        pattern = f"%{search}%"
         or_filters = [
-            ["summary", "like", like],
-            ["actor_name", "like", like],
-            ["actor", "like", like],
-            ["target_label", "like", like],
+            ("summary", "like", pattern),
+            ("event_type", "like", pattern),
+            ("document_name", "like", pattern),
+            ("user_name", "like", pattern),
         ]
 
-    fields = [
-        "name",
-        "organization",
-        "actor",
-        "actor_name",
-        "actor_image",
-        "event_type",
-        "action_group",
-        "summary",
-        "target_doctype",
-        "target_name",
-        "target_label",
-        "source",
-        "datetime",
-    ]
-
-    if or_filters:
-        total_count = _count_with_or_filters(filters, or_filters)
-    else:
-        total_count = frappe.db.count("Activity", filters=filters)
+    total_count = _count_with_or_filters(filters, or_filters)
+    page = max(int(page or 1), 1)
+    page_size = min(max(int(page_size or 30), 1), 100)
+    direction = "asc" if str(order).lower() == "asc" else "desc"
 
     rows = frappe.get_all(
-        "Activity",
-        fields=fields,
-        filters=filters,
-        or_filters=or_filters,
-        order_by=f"datetime {order}",
+        "Activity Stream",
+        filters=[list(f) for f in filters],
+        or_filters=[list(f) for f in or_filters] or None,
+        fields=[
+            "name",
+            "datetime",
+            "summary",
+            "user",
+            "user_name",
+            "action",
+            "action_group",
+            "event_type",
+            "document_type",
+            "document_name",
+            "event_origin",
+            "args",
+        ],
+        order_by=f"datetime {direction}",
         start=(page - 1) * page_size,
-        limit=page_size,
+        page_length=page_size,
+        ignore_permissions=True,
     )
 
-    total_pages = max(-(-total_count // page_size), 1)
+    data = [
+        {
+            "name": row.name,
+            "datetime": row.datetime,
+            "summary": row.summary,
+            "actor": row.user,
+            "actor_name": row.user_name,
+            "actor_image": None,
+            "action_group": row.action_group or row.action,
+            "event_type": row.event_type,
+            "target_doctype": row.document_type,
+            "target_name": row.document_name,
+            "target_label": row.document_name,
+            "source": row.event_origin,
+            "meta": row.args,
+        }
+        for row in rows
+    ]
 
+    actions = get_available_actions(organization)
     return {
-        "data": rows,
+        "data": data,
         "total_count": total_count,
-        "total_pages": total_pages,
-        "available_action_groups": get_available_action_groups(organization),
+        "total_pages": max(-(-total_count // page_size), 1),
+        "available_actions": actions,
+        # Kept so an existing consumer reading `available_action_groups` still works.
+        "available_action_groups": actions,
     }
 
 
-def get_available_action_groups(organization: str) -> list:
+def get_available_actions(organization: str) -> list:
+    """Distinct `action_group` values present for this org, for the feed's filter.
+
+    Falls back to nothing rather than to `action`: the raw lifecycle verbs
+    (Create/Update/Delete) are not useful as a business filter, and a row only lacks a
+    group when no producer app claimed its doctype.
+    """
     rows = frappe.get_all(
-        "Activity",
+        "Activity Stream",
         filters={"organization": organization},
-        distinct=True,
-        pluck="action_group",
+        fields=["distinct action_group as action_group"],
+        ignore_permissions=True,
     )
-    return sorted([r for r in rows if r])
-
-
-# Remap batching. Bounds how long one statement holds row locks and how much undo a
-# single transaction accumulates, so a rename on a large org cannot lock out concurrent
-# activity logging. MAX_BATCHES is a runaway guard, not an expected limit.
-REMAP_BATCH_SIZE = 5000
-REMAP_MAX_BATCHES = 400
+    return sorted({row.action_group for row in rows if row.action_group})
 
 
 def remap_organization(old_name: str, new_name: str, *, commit_between_batches: bool = False) -> int:
     """Repoint existing activity rows at an organization that was renamed.
 
-    `Activity.organization` is a **Data** column, not a Link — deliberately, so the engine
-    carries no dependency on any producer app's organization doctype. The price is that
-    Frappe's rename cascade (which only rewrites Link fields) never reaches it: after a
-    rename the feed filters on the new name, matches nothing, and looks as though every
-    past activity was wiped. This rewrites the stored name so the history survives.
+    `organization` is a Data column, not a Link, so the engine needs no knowledge of the
+    producer app's organization doctype. The price is that Frappe's rename cascade (which
+    only rewrites Link fields) never reaches it: after a rename the feed filters on the
+    new name, matches nothing, and looks as though every past activity was wiped.
 
-    Driven entirely off `organization`, which is indexed twice (its own index plus the
-    leading column of `org_datetime`). `target_name` / `target_label` are folded into the
-    same statement rather than a second pass: they are NOT indexed, so filtering on them
-    would full-scan every tenant's rows and take row locks across the whole table. The one
-    case that costs us is a row whose target is this organization but whose `organization`
-    is NULL (org resolution failed at log time) — already invisible in the feed anyway.
+    Driven entirely off `organization`, which is indexed. `document_name` is folded into
+    the same statement rather than a second pass: it is not indexed, so filtering on it
+    would full-scan every tenant's rows and lock them.
 
-    `commit_between_batches` must stay False while a transaction is still open that the
-    caller may need to roll back — notably inside an `after_rename` doc event, where
-    `rename_doc` has work left to do and a commit would make a partial rename durable.
-    Callers that run after the rename has committed (see the producer-side shim, which
-    defers via `frappe.db.after_commit`) pass True so lock hold time stays bounded.
+    `commit_between_batches` must stay False while a transaction is open that the caller
+    may still need to roll back, notably inside an `after_rename` doc event where a
+    commit would make a partial rename durable.
 
     Returns the number of rows updated. Never raises.
     """
@@ -390,21 +351,16 @@ def remap_organization(old_name: str, new_name: str, *, commit_between_batches: 
     try:
         updated = 0
         for _ in range(REMAP_MAX_BATCHES):
-            remaining = frappe.db.count("Activity", {"organization": old_name})
+            remaining = frappe.db.count("Activity Stream", {"organization": old_name})
             if not remaining:
                 break
 
-            # Self-consuming loop: each pass moves up to REMAP_BATCH_SIZE rows off
-            # `old_name`, so the next count shrinks by that much.
             frappe.db.sql(
-                """UPDATE `tabActivity`
+                """UPDATE `tabActivity Stream`
                    SET `organization` = %(new)s,
-                       `target_name` = CASE
-                           WHEN `target_doctype` = 'Organization' AND `target_name` = %(old)s
-                           THEN %(new)s ELSE `target_name` END,
-                       `target_label` = CASE
-                           WHEN `target_doctype` = 'Organization' AND `target_label` = %(old)s
-                           THEN %(new)s ELSE `target_label` END
+                       `document_name` = CASE
+                           WHEN `document_type` = 'Organization' AND `document_name` = %(old)s
+                           THEN %(new)s ELSE `document_name` END
                    WHERE `organization` = %(old)s
                    LIMIT %(limit)s""",
                 {"old": old_name, "new": new_name, "limit": REMAP_BATCH_SIZE},
@@ -422,6 +378,5 @@ def remap_organization(old_name: str, new_name: str, *, commit_between_batches: 
 
         return updated
     except Exception:
-        # A failed remap must never break the rename itself.
         frappe.log_error(frappe.get_traceback(), f"activity remap_organization failed: {old_name} -> {new_name}")
         return 0
