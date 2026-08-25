@@ -422,6 +422,23 @@ def log_create(doc, method):
 
 
 def log_update(doc, method):
+    """Record a genuine update, and only a genuine update.
+
+    Frappe runs `on_update` as part of `insert()`: `Document.insert` sets
+    `flags.in_insert`, then calls `run_post_save_methods()`, which fires `on_update`
+    because `_action` is "save" (frappe/model/document.py). So a single `doc.insert()`
+    triggers both `after_insert` and `on_update`, and without this guard every insert
+    records twice: the real Create entry plus a bogus Update entry whose diff is the whole
+    document. That is what made adding one comment read as "commented on X" immediately
+    followed by "edited a comment on X".
+
+    A submit has the same shape: `_action == "submit"` runs `on_update` *and* `on_submit`,
+    so the Submit entry is the meaningful one and the Update is noise.
+    """
+    if doc.flags.in_insert:
+        return
+    if getattr(doc, "_action", None) == "submit":
+        return
     log_event(doc, "Update")
 
 

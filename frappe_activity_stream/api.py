@@ -300,7 +300,15 @@ def get_activities(
         for row in rows
     ]
 
-    actions = get_available_actions(organization)
+    # The filter dropdown is a convenience. If computing it fails, the feed itself must
+    # still render: this query taking the whole endpoint down with it is how a broken
+    # dropdown turned into an unusable Activities page once already.
+    try:
+        actions = get_available_actions(organization)
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "activity get_available_actions failed")
+        actions = []
+
     return {
         "data": data,
         "total_count": total_count,
@@ -318,11 +326,17 @@ def get_available_actions(organization: str) -> list:
     (Create/Update/Delete) are not useful as a business filter, and a row only lacks a
     group when no producer app claimed its doctype.
     """
-    rows = frappe.get_all(
-        "Activity Stream",
-        filters={"organization": organization},
-        fields=["distinct action_group as action_group"],
-        ignore_permissions=True,
+    # Query Builder, not get_all(fields=[...]): v16 rejects any field string that is not a
+    # plain, backticked, table-qualified or aliased name, so "distinct action_group as
+    # action_group" throws there while working on v15. Same portability trap as the count
+    # query above.
+    activity = frappe.qb.DocType("Activity Stream")
+    rows = (
+        frappe.qb.from_(activity)
+        .select(activity.action_group)
+        .distinct()
+        .where(activity.organization == organization)
+        .run(as_dict=True)
     )
     return sorted({row.action_group for row in rows if row.action_group})
 
