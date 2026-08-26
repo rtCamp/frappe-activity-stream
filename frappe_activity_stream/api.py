@@ -194,6 +194,8 @@ def _count_with_or_filters(filters: list, or_filters: list) -> int:
             query = query.where(activity[field] >= value)
         elif operator == "<=":
             query = query.where(activity[field] <= value)
+        elif operator == "not in":
+            query = query.where(activity[field].notin(value))
 
     if or_filters:
         condition = None
@@ -219,8 +221,13 @@ def get_activities(
     order: str = "desc",
     date_from: str | None = None,
     date_to: str | None = None,
+    exclude_actors: list | None = None,
 ) -> dict:
     """Org-scoped, paginated feed.
+
+    `exclude_actors` drops entries by actor. The engine has no opinion on who is worth
+    showing, so the consuming app decides: godam_core passes ["Administrator"] to keep
+    system and background-job activity out of an end-user feed.
 
     Reads `Activity Stream` but returns the field names the consuming UI already uses,
     so storage details do not leak into the API contract. `action_group` is accepted as
@@ -231,6 +238,8 @@ def get_activities(
     action = action or action_group
 
     filters = [("organization", "=", organization)]
+    if exclude_actors:
+        filters.append(("user", "not in", list(exclude_actors)))
     if action:
         filters.append(("action_group", "=", action))
     if event_type:
@@ -304,7 +313,7 @@ def get_activities(
     # still render: this query taking the whole endpoint down with it is how a broken
     # dropdown turned into an unusable Activities page once already.
     try:
-        actions = get_available_actions(organization)
+        actions = get_available_actions(organization, exclude_actors=exclude_actors)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "activity get_available_actions failed")
         actions = []
@@ -319,7 +328,7 @@ def get_activities(
     }
 
 
-def get_available_actions(organization: str) -> list:
+def get_available_actions(organization: str, exclude_actors: list | None = None) -> list:
     """Distinct `action_group` values present for this org, for the feed's filter.
 
     Falls back to nothing rather than to `action`: the raw lifecycle verbs
@@ -331,13 +340,12 @@ def get_available_actions(organization: str) -> list:
     # action_group" throws there while working on v15. Same portability trap as the count
     # query above.
     activity = frappe.qb.DocType("Activity Stream")
-    rows = (
-        frappe.qb.from_(activity)
-        .select(activity.action_group)
-        .distinct()
-        .where(activity.organization == organization)
-        .run(as_dict=True)
+    query = (
+        frappe.qb.from_(activity).select(activity.action_group).distinct().where(activity.organization == organization)
     )
+    if exclude_actors:
+        query = query.where(activity.user.notin(list(exclude_actors)))
+    rows = query.run(as_dict=True)
     return sorted({row.action_group for row in rows if row.action_group})
 
 
