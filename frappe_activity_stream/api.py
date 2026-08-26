@@ -349,35 +349,63 @@ def get_available_actions(organization: str, exclude_actors: list | None = None)
     return sorted({row.action_group for row in rows if row.action_group})
 
 
-def flush_pending_activity(max_rounds: int = 20) -> None:
-    """Drain the deferred-insert queue for Activity Stream.
+def flush_pending_activity(max_records: int = 5000) -> int:
+    """Write out activity rows still sitting in the deferred-insert queue.
 
-    Rows are written with `deferred_insert`, so they sit in Redis until Frappe's
-    `frappe.deferred_insert.save_to_db` cron drains them (every 15 minutes). Anything
-    still queued is invisible to a table UPDATE, which matters for
-    `remap_organization`: a queued row still carrying the old organization name would be
-    inserted *after* the remap ran and would then be orphaned permanently, with no later
-    pass to catch it. Draining first closes that window.
+    Rows are written with `deferred_insert`, which only pushes them onto a Redis list.
+    Frappe drains every such list from `frappe.deferred_insert.save_to_db` on the
+    `0/15 * * * *` cron, which is where the "entries appear about fifteen minutes late"
+    behaviour comes from. The engine registers this on a one-minute cron instead (see
+    hooks.py) so the feed is at most about a minute behind.
 
-    `save_to_db` handles at most 500 records per doctype per call, hence the loop. It
-    drains other doctypes' queues too, which is exactly what the cron does anyway.
+    Deliberately drains **only** the Activity Stream list rather than calling
+    `save_to_db()`. That helper walks every queued doctype, so running it once a minute
+    would quietly change the flush cadence for every other app on the site. It also caps
+    itself at 500 records per doctype per call, which this does not need to.
 
-    Never raises: this runs after the rename has already committed.
+    Also called before `remap_organization`: a rename is a table UPDATE and cannot see rows
+    that are still in Redis.
+
+    Returns the number of rows written. Never raises: this runs from a scheduled job and
+    from an after-commit callback, and neither should fail because of the activity feed.
     """
     try:
-        from frappe.deferred_insert import queue_prefix, save_to_db
+        from frappe.deferred_insert import insert_record, queue_prefix
     except Exception:
-        return
+        return 0
 
+    # Same key `deferred_insert` pushes to: the unnamespaced form used by rpush.
     key = f"{queue_prefix}Activity Stream"
-    for _ in range(max_rounds):
-        try:
-            if not frappe.cache.llen(key):
-                return
-            save_to_db()
-        except Exception:
-            frappe.log_error(frappe.get_traceback(), "activity flush_pending_activity failed")
-            return
+    written = 0
+
+    try:
+        while written < max_records:
+            payload = frappe.cache.lpop(key)
+            if not payload:
+                break
+
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8")
+            records = json.loads(payload)
+            if isinstance(records, dict):
+                records = [records]
+
+            for record in records:
+                # insert_record logs and swallows its own failures, so one bad row cannot
+                # strand the rest of the queue.
+                insert_record(record, "Activity Stream")
+                written += 1
+
+            # Keep the transaction (and the undo log) bounded on a large backlog.
+            if written and written % 500 == 0:
+                frappe.db.commit()  # nosemgrep
+    except Exception:
+        frappe.log_error(message=frappe.get_traceback(), title="activity flush_pending_activity failed")
+
+    if written:
+        frappe.db.commit()  # nosemgrep
+
+    return written
 
 
 def remap_organization(old_name: str, new_name: str, *, commit_between_batches: bool = False) -> int:
