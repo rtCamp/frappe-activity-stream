@@ -21,12 +21,15 @@ build-backend = "flit_core.buildapi"
 # package_name = "~=1.1.0"
 
 [tool.bench.frappe-dependencies]
-frappe = ">=15.40.4,<17.0.0"
+# v16 only: requires-python above is >=3.14, which v15 benches cannot satisfy.
+# Claiming >=15 here makes bench accept the app on a v15 site and then fail at
+# pip install, which reads as an environment problem instead of an unsupported version.
+frappe = ">=16.0.0,<17.0.0"
 
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py314"
 
 exclude = [
     "**/doctype/*/boilerplate/*.py", # boilerplate are template strings, not valid python

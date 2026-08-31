@@ -29,6 +29,7 @@ from frappe.query_builder.functions import Count
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream import (
     get_event_details,
+    remove_sensitive_data,
 )
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     get_settings_cached,
@@ -65,24 +66,15 @@ REMAP_MAX_BATCHES = 400
 
 
 def _mask_sensitive(meta: dict | None) -> dict | None:
-    """Mask sensitive keys anywhere in the payload, including nested dicts and lists."""
+    """Mask secrets in an explicitly logged payload.
+
+    Delegates to the doctype module's `remove_sensitive_data` so the explicit and
+    hook-captured paths cannot drift apart: this used to be a separate recursive
+    implementation while the hook path only checked top-level keys.
+    """
     if not meta or not isinstance(meta, dict):
         return meta
-    try:
-        sensitive = get_settings_cached().get_sensitive_keys()
-    except Exception:
-        sensitive = set()
-    if not sensitive:
-        return meta
-    return _mask_value(meta, sensitive)
-
-
-def _mask_value(value, sensitive):
-    if isinstance(value, dict):
-        return {k: ("*****" if k in sensitive else _mask_value(v, sensitive)) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_mask_value(item, sensitive) for item in value]
-    return value
+    return remove_sensitive_data(meta)
 
 
 def _resolve_organization(organization: str | None):
@@ -104,6 +96,7 @@ def log_activity(
     action: str | None = None,
     target_doctype: str | None = None,
     target_name: str | None = None,
+    target_label: str | None = None,
     summary: str | None = None,
     organization: str | None = None,
     actor: str | None = None,
@@ -125,8 +118,11 @@ def log_activity(
     the caller has already decided the event is worth recording. Only the global
     `enabled` switch applies.
 
-    Unknown keyword arguments are accepted and ignored so that a producer app pinned to
-    an older or newer engine cannot break on a signature change.
+    Unknown keyword arguments are accepted rather than raising, so that a producer app
+    pinned to an older or newer engine cannot break on a signature change. They are
+    logged: a typo or a never-implemented parameter is otherwise indistinguishable from
+    version skew, which is how every call site passed `target_label` to a function that
+    did not have the parameter and no one noticed.
 
     Never raises.
     """
@@ -138,6 +134,12 @@ def log_activity(
             return
 
         frappe.local._skip_activity_stream_logging = True
+
+        if _ignored:
+            frappe.log_error(
+                f"log_activity({event_type!r}) ignored unknown arguments: {sorted(_ignored)}",
+                "activity unknown log_activity argument",
+            )
 
         actor = actor or frappe.session.user
         action = action or _infer_action(event_type)
@@ -156,6 +158,7 @@ def log_activity(
                 "summary": summary,
                 "document_type": target_doctype,
                 "document_name": target_name,
+                "target_label": target_label,
                 "datetime": frappe.utils.now_datetime(),
                 "ip_address": get_ip_address(),
                 "event_origin": source or origin,
@@ -258,6 +261,7 @@ def get_activities(
             ("summary", "like", pattern),
             ("event_type", "like", pattern),
             ("document_name", "like", pattern),
+            ("target_label", "like", pattern),
             ("user_name", "like", pattern),
         ]
 
@@ -281,8 +285,8 @@ def get_activities(
             "event_type",
             "document_type",
             "document_name",
+            "target_label",
             "event_origin",
-            "args",
         ],
         order_by=f"datetime {direction}",
         start=(page - 1) * page_size,
@@ -302,9 +306,12 @@ def get_activities(
             "event_type": row.event_type,
             "target_doctype": row.document_type,
             "target_name": row.document_name,
-            "target_label": row.document_name,
+            "target_label": row.target_label or row.document_name,
             "source": row.event_origin,
-            "meta": row.args,
+            # `args` is deliberately NOT returned. For hook-captured events it holds the body
+            # of the request that made the change, so returning it would let any org manager
+            # read other members' request payloads, and nothing in the UI consumes it. If a
+            # drill-down ever needs it, add it back behind the recursive masker.
         }
         for row in rows
     ]
@@ -369,6 +376,16 @@ def flush_pending_activity(max_records: int = 5000) -> int:
     Returns the number of rows written. Never raises: this runs from a scheduled job and
     from an after-commit callback, and neither should fail because of the activity feed.
     """
+    # Runs once a minute on every site that has this app, including sites with no feed and
+    # no intention of having one. `enabled` is already read on every capture path, so
+    # checking it here makes the job free rather than a standing scheduler cost nobody
+    # asked for. A disabled site also queues nothing, so there is nothing to drain.
+    try:
+        if not getattr(get_settings_cached(), "enabled", 0):
+            return 0
+    except Exception:
+        return 0
+
     try:
         from frappe.deferred_insert import insert_record, queue_prefix
     except Exception:

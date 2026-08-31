@@ -84,33 +84,59 @@ def apply_summary_filter(activity, doc, action):
 
 class ActivityStream(Document):
     def before_validate(self):
-        """Never let link validation cost us a historical record.
+        """Skip link validation only when the target is already gone.
 
-        `document_name` is a Dynamic Link, and rows are written through
-        `deferred_insert`, so the actual INSERT happens when the queue is flushed,
-        which can be minutes later. By then a delete event's target document is gone
-        and Frappe's link validation rejects the row. `deferred_insert` swallows that
-        failure with a logger warning, so the event disappears without a trace. An
-        activity row describes something that already happened and must survive the
-        disappearance of what it describes.
+        `document_name` is a Dynamic Link and rows are written through `deferred_insert`,
+        so the INSERT happens when the queue is drained rather than at write time. By then
+        a delete event's target no longer exists, Frappe's link validation rejects the row,
+        and `deferred_insert` discards it with only a logger warning: the delete event
+        vanishes without a trace. An activity row has to outlive what it describes.
+
+        Scoped to the case that actually needs it rather than setting `ignore_links`
+        unconditionally, so `user`, `document_type` and a live `document_name` keep being
+        validated and a genuinely bad reference is still rejected.
         """
-        self.flags.ignore_links = True
+        if not self.document_type or not self.document_name:
+            return
+        try:
+            if not frappe.db.exists(self.document_type, self.document_name):
+                self.flags.ignore_links = True
+        except Exception:
+            # An unknown/removed doctype cannot be validated either; keep the row.
+            self.flags.ignore_links = True
+
+
+def mask_value(value, sensitive_keys):
+    """Recursively mask sensitive keys in nested dicts and lists.
+
+    A top-level-only walk is not enough: a request body is routinely
+    `{"payload": {"api_key": "..."}}`, and the secret is one level down. Since document
+    hooks are the primary capture path, this walk sees most of the traffic on the site.
+    """
+    if isinstance(value, dict):
+        return {k: ("*****" if k in sensitive_keys else mask_value(v, sensitive_keys)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_value(item, sensitive_keys) for item in value]
+    return value
 
 
 def remove_sensitive_data(input_dict):
-    """
-    Remove sensitive data from args dictionary.
+    """Mask sensitive data anywhere in an args payload.
+
+    Both capture paths use this, so masking cannot be stronger on one than the other.
     """
     if not input_dict:
         return input_dict
 
-    settings = get_settings_cached()
-    sensitive_keys = settings.get_sensitive_keys()
+    try:
+        sensitive_keys = get_settings_cached().get_sensitive_keys()
+    except Exception:
+        # Never let a settings read failure store an unmasked payload.
+        sensitive_keys = set()
+    if not sensitive_keys:
+        return input_dict
 
-    for key in sensitive_keys:
-        if key in input_dict:
-            input_dict[key] = "*****"
-    return input_dict
+    return mask_value(input_dict, sensitive_keys)
 
 
 def generate_summary(activity, is_single=False):

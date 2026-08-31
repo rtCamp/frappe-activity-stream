@@ -16,6 +16,7 @@
   "datetime",
   "document_type",
   "document_name",
+  "target_label",
   "origin_details_section",
   "ip_address",
   "column_break_nqxz",
@@ -178,6 +179,13 @@
    "read_only": 1,
    "search_index": 1,
    "description": "Business grouping used by the activity feed filter. Set explicitly when logging, or derived per doctype by the producer app's activity_action_group hook."
+  },
+  {
+   "fieldname": "target_label",
+   "fieldtype": "Data",
+   "label": "Target Label",
+   "read_only": 1,
+   "description": "Human-readable name of the target at the time of the event, e.g. a media title. Kept because the docname is usually a hash, and because the target may later be renamed or deleted."
   }
  ],
  "in_create": 1,
