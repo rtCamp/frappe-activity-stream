@@ -8,6 +8,7 @@ from frappe.core.doctype.version.version import get_diff
 from frappe.model.document import Document
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
+    DEFAULT_SENSITIVE_KEYS,
     get_settings_cached,
     should_log_activity,
     should_log_path,
@@ -17,24 +18,108 @@ from frappe_activity_stream.utils import get_ip_address
 MAX_SUMMARY_LENGTH = 40
 
 
+def resolve_extra_fields(doc=None):
+    """Producer-supplied values for fields this app does not define itself.
+
+    A producer registers `activity_extra_fields` and returns {fieldname: value}, so
+    anything it added to Activity Stream as a Custom Field can be stamped without the
+    engine knowing the concept. Later hooks win a key clash.
+    """
+    extras = {}
+    for method in frappe.get_hooks("activity_extra_fields") or []:
+        try:
+            values = frappe.get_attr(method)(doc)
+            if values:
+                extras.update(values)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), f"activity_extra_fields failed: {method}")
+    return extras
+
+
+def writable_extras(extras):
+    """Drop keys that are not fields on Activity Stream.
+
+    A producer whose Custom Field is not installed is then a no-op, not an error.
+    """
+    if not extras:
+        return {}
+    try:
+        known = {df.fieldname for df in frappe.get_meta("Activity Stream").fields}
+    except Exception:
+        return {}
+    return {k: v for k, v in extras.items() if k in known}
+
+
+def resolve_action_group(doctype):
+    """Business grouping for a doctype, declared by producer apps as
+    `activity_action_group = {"Transcoder Job": "Media"}`.
+
+    Only for hook-captured events; explicit ones pass their own group.
+    """
+    groups = frappe.get_hooks("activity_action_group") or {}
+    values = groups.get(doctype) or []
+    return values[-1] if values else None
+
+
+def apply_summary_filter(activity, doc, action):
+    """Let the producer app rewrite the generated summary.
+
+    Registered as `activity_summary_formatter = {"<DocType>": "path.to.formatter"}`, so
+    "user updated Transcoder Job abc: is_archived 0 to 1" can read as "Archived media
+    Foo.mp4" without the engine knowing what media is.
+    """
+    formatters = frappe.get_hooks("activity_summary_formatter") or {}
+    methods = list(formatters.get(doc.doctype) or []) + list(formatters.get("*") or [])
+    for method in methods:
+        try:
+            summary = frappe.get_attr(method)(doc, action, activity)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), f"activity_summary_formatter failed: {method}")
+            continue
+        if summary:
+            return summary
+    return activity.summary
+
+
 class ActivityStream(Document):
-    pass
+    def _validate_links(self):
+        """Let an activity row outlive the document it describes."""
+        if self.document_type and self.document_name:
+            try:
+                if not frappe.db.exists(self.document_type, self.document_name):
+                    self.flags.ignore_links = True
+            except Exception:
+                self.flags.ignore_links = True
+        super()._validate_links()
+
+
+def mask_value(value, sensitive_keys):
+    """Recursively mask sensitive keys in nested dicts and lists."""
+    if isinstance(value, dict):
+        return {k: ("*****" if k in sensitive_keys else mask_value(v, sensitive_keys)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_value(item, sensitive_keys) for item in value]
+    return value
 
 
 def remove_sensitive_data(input_dict):
-    """
-    Remove sensitive data from args dictionary.
+    """Mask sensitive data anywhere in an args payload.
+
+    Both capture paths use this, so masking cannot be stronger on one than the other.
     """
     if not input_dict:
         return input_dict
 
-    settings = get_settings_cached()
-    sensitive_keys = settings.get_sensitive_keys()
+    try:
+        sensitive_keys = get_settings_cached().get_sensitive_keys()
+    except Exception:
+        # Never let a settings read failure store an unmasked payload.
+        sensitive_keys = set(DEFAULT_SENSITIVE_KEYS)
 
-    for key in sensitive_keys:
-        if key in input_dict:
-            input_dict[key] = "*****"
-    return input_dict
+    if not sensitive_keys:
+        return input_dict
+
+    return mask_value(input_dict, sensitive_keys)
 
 
 def generate_summary(activity, is_single=False):
@@ -46,7 +131,6 @@ def generate_summary(activity, is_single=False):
     doctype = activity.document_type
     docname = activity.document_name
     diff = activity.diff
-    origin = activity.event_origin
 
     # For single doctypes, docname is same as doctype, so use only doctype in summary
     doc_display = doctype if is_single else f"{doctype} {docname}"
@@ -59,7 +143,6 @@ def generate_summary(activity, is_single=False):
 
     summary_parts = []
 
-    # Handle Create, Update, Delete, Submit, Cancel
     if action == "Create":
         summary_parts.append(f"{user} created {doc_display}")
     elif action == "Delete":
@@ -70,13 +153,9 @@ def generate_summary(activity, is_single=False):
         summary_parts.append(f"{user} cancelled {doc_display}")
     elif action == "Update":
         changes = []
-        # Parent field changes
         for change in diff_data.get("changed", []):
             field, old, new = change[:3]
-            changes.append(
-                f"{field} from '{str(old)[:MAX_SUMMARY_LENGTH]}' to '{str(new)[:MAX_SUMMARY_LENGTH]}'"
-            )
-        # Table field changes
+            changes.append(f"{field} from '{str(old)[:MAX_SUMMARY_LENGTH]}' to '{str(new)[:MAX_SUMMARY_LENGTH]}'")
         for row_change in diff_data.get("row_changed", []):
             table_field = row_change[0]
             row_idx = row_change[1]
@@ -92,17 +171,9 @@ def generate_summary(activity, is_single=False):
                 changes.append(f"{key} rows for {field}")
 
         if changes:
-            summary_parts.append(
-                f"{user} updated {doc_display}: " + ", ".join(changes[:3])
-            )
+            summary_parts.append(f"{user} updated {doc_display}: " + ", ".join(changes[:3]))
         else:
             summary_parts.append(f"{user} updated {doc_display}")
-
-    # API/Background Job info
-    if origin == "API Call" and activity.method:
-        summary_parts.append(f"via API {activity.method}")
-    elif origin == "Background Job" and activity.method:
-        summary_parts.append(f"via Background Job {activity.method}")
 
     return "; ".join(summary_parts)
 
@@ -174,7 +245,6 @@ def de_json(input_dict):
 
 def get_args_from_request(request):
     try:
-        # Prefer JSON body; fallback to form data, then query params
         args = {}
         if getattr(request, "is_json", False):
             args = request.get_json(silent=True) or {}
@@ -204,9 +274,7 @@ def log_access():
         if not should_log_activity("User", "Access", user, ip_address):
             return
 
-        event_origin, path, args, method, referrer = get_event_details(
-            exclude_desk_events=False
-        )
+        event_origin, path, args, method, referrer = get_event_details(exclude_desk_events=False)
 
         if not path:
             return
@@ -229,25 +297,22 @@ def log_access():
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"Error logging access activity for {user}"
-        )
+        frappe.log_error(frappe.get_traceback(), f"Error logging access activity for {user}")
 
 
 def log_event(doc, action):
-    # Guard against recursive logging (e.g. Error Log inserts triggering log_create again)
-    # Use frappe.local so the flag is per-request/thread, not global
     if getattr(frappe.local, "_skip_activity_stream_logging", False):
         return
-    # Never log Activity Stream or Error Log to avoid infinite recursion
     if doc.doctype in ("Activity Stream", "Error Log"):
+        return
+    if doc.doctype == "Comment" and (doc.get("comment_type") or "") != "Comment":
         return
     try:
         frappe.local._skip_activity_stream_logging = True
@@ -255,7 +320,6 @@ def log_event(doc, action):
         ip_address = get_ip_address()
         if not should_log_activity(doc.doctype, action, user, ip_address):
             return
-        # check if this event is from a API call or a Background Job
         origin, path, args, method, referrer = get_event_details()
 
         doctype, docname = doc.doctype, doc.name
@@ -283,8 +347,17 @@ def log_event(doc, action):
             docname = doctype
 
         diff = None
+        diff_failed = False
         if data_before or data_after:
-            diff = get_diff(data_before, data_after)
+            try:
+                diff = get_diff(data_before, data_after)
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), f"activity diff failed: {action} on {doctype}")
+                diff = None
+                diff_failed = True
+
+        if action == "Update" and not diff and not diff_failed:
+            return
 
         if diff:
             # Remove sensitive data from diff
@@ -328,24 +401,22 @@ def log_event(doc, action):
                 "datetime": frappe.utils.now_datetime(),
                 "document_type": doctype,
                 "document_name": docname,
+                "action_group": resolve_action_group(doctype),
                 "event_origin": origin,
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
-                "diff": frappe.as_json(diff, indent=None, separators=(",", ":"))
-                if diff
-                else None,
+                "args": json.dumps(args, indent=4, default=str),
+                "diff": frappe.as_json(diff, indent=None, separators=(",", ":")) if diff else None,
             }
         )
+        activity.update(writable_extras(resolve_extra_fields(doc)))
         activity.summary = generate_summary(activity, is_single)
-        # before deferred_insert, run before_insert hooks
+        activity.summary = apply_summary_filter(activity, doc, action)
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"Error logging activity: {action} on {doc}"
-        )
+        frappe.log_error(frappe.get_traceback(), f"Error logging activity: {action} on {doc}")
     finally:
         frappe.local._skip_activity_stream_logging = False
 
@@ -355,6 +426,11 @@ def log_create(doc, method):
 
 
 def log_update(doc, method):
+    """Record a genuine update, and only a genuine update."""
+    if doc.flags.in_insert:
+        return
+    if getattr(doc, "_action", None) == "submit":
+        return
     log_event(doc, "Update")
 
 
@@ -393,16 +469,14 @@ def log_login(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"Error logging login activity for {user}"
-        )
+        frappe.log_error(frappe.get_traceback(), f"Error logging login activity for {user}")
 
 
 def log_logout(login_manager):
@@ -429,16 +503,14 @@ def log_logout(login_manager):
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"Error logging logout activity for {user}"
-        )
+        frappe.log_error(frappe.get_traceback(), f"Error logging logout activity for {user}")
 
 
 def activity_log_after_insert(doc, method):
@@ -467,21 +539,18 @@ def log_impersonate(user):
                 "action": "Impersonate",
                 "ip_address": ip_address,
                 "datetime": frappe.utils.now_datetime(),
-                "summary": f"User {impersonator} impersonated user {user}."
-                + (f" Reason: {reason}" if reason else ""),
+                "summary": f"User {impersonator} impersonated user {user}." + (f" Reason: {reason}" if reason else ""),
                 "document_type": "User",
                 "document_name": user,
                 "event_origin": event_origin,
                 "method": path,
                 "type": method,
                 "referrer": referrer,
-                "args": json.dumps(args, indent=4,default=str),
+                "args": json.dumps(args, indent=4, default=str),
             }
         )
         # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        frappe.log_error(
-            frappe.get_traceback(), f"Error logging impersonation activity for {user}"
-        )
+        frappe.log_error(frappe.get_traceback(), f"Error logging impersonation activity for {user}")

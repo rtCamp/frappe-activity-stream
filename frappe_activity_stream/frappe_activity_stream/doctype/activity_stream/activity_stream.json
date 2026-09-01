@@ -8,11 +8,14 @@
   "user",
   "action",
   "summary",
+  "event_type",
+  "action_group",
   "column_break_whrw",
   "user_name",
   "datetime",
   "document_type",
   "document_name",
+  "target_label",
   "origin_details_section",
   "ip_address",
   "column_break_nqxz",
@@ -96,7 +99,7 @@
    "fieldname": "event_origin",
    "fieldtype": "Select",
    "label": "Event Origin",
-   "options": "\nDesk\nAPI Call\nBackground Job",
+   "options": "\nDesk\nAPI Call\nBackground Job\nSystem",
    "read_only": 1
   },
   {
@@ -150,6 +153,30 @@
    "fieldtype": "Text",
    "label": "Referrer",
    "read_only": 1
+  },
+  {
+   "fieldname": "event_type",
+   "fieldtype": "Data",
+   "label": "Event Type",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Semantic event name for explicitly logged events (e.g. media.archived). Empty for events captured from document hooks."
+  },
+  {
+   "fieldname": "action_group",
+   "fieldtype": "Select",
+   "label": "Action Group",
+   "options": "\nMedia\nContent\nComment\nMembership\nOrganization\nBilling\nAccount\nAuth\nOther",
+   "read_only": 1,
+   "search_index": 1,
+   "description": "Business grouping used by the activity feed filter. Set explicitly when logging, or derived per doctype by the producer app's activity_action_group hook."
+  },
+  {
+   "fieldname": "target_label",
+   "fieldtype": "Data",
+   "label": "Target Label",
+   "read_only": 1,
+   "description": "Human-readable name of the target at the time of the event, e.g. a media title. Kept because the docname is usually a hash, and because the target may later be renamed or deleted."
   }
  ],
  "in_create": 1,
