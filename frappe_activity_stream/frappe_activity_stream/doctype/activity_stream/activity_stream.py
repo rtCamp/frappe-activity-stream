@@ -8,6 +8,7 @@ from frappe.core.doctype.version.version import get_diff
 from frappe.model.document import Document
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
+    DEFAULT_SENSITIVE_KEYS,
     get_settings_cached,
     should_log_activity,
     should_log_path,
@@ -132,7 +133,8 @@ def remove_sensitive_data(input_dict):
         sensitive_keys = get_settings_cached().get_sensitive_keys()
     except Exception:
         # Never let a settings read failure store an unmasked payload.
-        sensitive_keys = set()
+        sensitive_keys = set(DEFAULT_SENSITIVE_KEYS)
+
     if not sensitive_keys:
         return input_dict
 
