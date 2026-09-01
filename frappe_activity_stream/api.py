@@ -175,8 +175,7 @@ def get_activities(
     date_to: str | None = None,
     exclude_actors: list | None = None,
 ) -> dict:
-    """Paginated feed. Permission and scoping are the caller's job.
-    """
+    """Paginated feed. Permission and scoping are the caller's job."""
     action = action or action_group
 
     filters = [(field, "=", value) for field, value in (scope or {}).items()]

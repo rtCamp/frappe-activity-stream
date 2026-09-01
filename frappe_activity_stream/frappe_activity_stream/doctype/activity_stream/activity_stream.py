@@ -353,7 +353,15 @@ def log_event(doc, action):
 
         diff = None
         if data_before or data_after:
-            diff = get_diff(data_before, data_after)
+            # The diff is enrichment, not the event. A Delete builds `data_after` as a bare
+            # doc and diffs a fully-populated document against it, which is the most likely
+            # place for get_diff to raise; letting that propagate loses the whole row to the
+            # outer handler, so a delete would simply never appear in the feed.
+            try:
+                diff = get_diff(data_before, data_after)
+            except Exception:
+                frappe.log_error(frappe.get_traceback(), f"activity diff failed: {action} on {doctype}")
+                diff = None
 
         if diff:
             # Remove sensitive data from diff
