@@ -83,8 +83,7 @@ def apply_summary_filter(activity, doc, action):
 
 class ActivityStream(Document):
     def _validate_links(self):
-        """Let an activity row outlive the document it describes.
-        """
+        """Let an activity row outlive the document it describes."""
         if self.document_type and self.document_name:
             try:
                 if not frappe.db.exists(self.document_type, self.document_name):
@@ -132,7 +131,6 @@ def generate_summary(activity, is_single=False):
     doctype = activity.document_type
     docname = activity.document_name
     diff = activity.diff
-    origin = activity.event_origin
 
     # For single doctypes, docname is same as doctype, so use only doctype in summary
     doc_display = doctype if is_single else f"{doctype} {docname}"
@@ -176,11 +174,6 @@ def generate_summary(activity, is_single=False):
             summary_parts.append(f"{user} updated {doc_display}: " + ", ".join(changes[:3]))
         else:
             summary_parts.append(f"{user} updated {doc_display}")
-
-    if origin == "API Call" and activity.method:
-        summary_parts.append(f"via API {activity.method}")
-    elif origin == "Background Job" and activity.method:
-        summary_parts.append(f"via Background Job {activity.method}")
 
     return "; ".join(summary_parts)
 
@@ -319,6 +312,8 @@ def log_event(doc, action):
         return
     if doc.doctype in ("Activity Stream", "Error Log"):
         return
+    if doc.doctype == "Comment" and (doc.get("comment_type") or "") != "Comment":
+        return
     try:
         frappe.local._skip_activity_stream_logging = True
         user = frappe.session.user
@@ -352,16 +347,17 @@ def log_event(doc, action):
             docname = doctype
 
         diff = None
+        diff_failed = False
         if data_before or data_after:
-            # The diff is enrichment, not the event. A Delete builds `data_after` as a bare
-            # doc and diffs a fully-populated document against it, which is the most likely
-            # place for get_diff to raise; letting that propagate loses the whole row to the
-            # outer handler, so a delete would simply never appear in the feed.
             try:
                 diff = get_diff(data_before, data_after)
             except Exception:
                 frappe.log_error(frappe.get_traceback(), f"activity diff failed: {action} on {doctype}")
                 diff = None
+                diff_failed = True
+
+        if action == "Update" and not diff and not diff_failed:
+            return
 
         if diff:
             # Remove sensitive data from diff

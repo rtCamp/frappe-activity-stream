@@ -284,6 +284,14 @@ def get_available_actions(scope: dict | None = None, exclude_actors: list | None
     return sorted({row.action_group for row in rows if row.action_group})
 
 
+def _insert_activity(record: dict) -> None:
+    """Write one queued row, bypassing permissions.
+    """
+    record = dict(record)
+    record["doctype"] = "Activity Stream"
+    frappe.get_doc(record).insert(ignore_permissions=True)
+
+
 def flush_pending_activity(max_records: int = 5000) -> int:
     """Write out activity rows still sitting in the deferred-insert queue.
 
@@ -300,12 +308,13 @@ def flush_pending_activity(max_records: int = 5000) -> int:
         return 0
 
     try:
-        from frappe.deferred_insert import insert_record, queue_prefix
+        from frappe.deferred_insert import queue_prefix
     except Exception:
         return 0
 
     key = f"{queue_prefix}Activity Stream"
     written = 0
+    discarded = 0
 
     try:
         while written < max_records:
@@ -320,13 +329,22 @@ def flush_pending_activity(max_records: int = 5000) -> int:
                 records = [records]
 
             for record in records:
-                insert_record(record, "Activity Stream")
+                try:
+                    _insert_activity(record)
+                except Exception:
+                    discarded += 1
+                    if discarded == 1:
+                        frappe.log_error(frappe.get_traceback(), "activity flush: row discarded")
+                    continue
                 written += 1
 
             if written and written % 500 == 0:
                 frappe.db.commit()  # nosemgrep
     except Exception:
         frappe.log_error(message=frappe.get_traceback(), title="activity flush_pending_activity failed")
+
+    if discarded > 1:
+        frappe.log_error(f"{discarded} queued activity rows discarded", "activity flush: rows discarded")
 
     if written:
         frappe.db.commit()  # nosemgrep
