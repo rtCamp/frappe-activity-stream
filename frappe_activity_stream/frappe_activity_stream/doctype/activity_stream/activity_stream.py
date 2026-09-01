@@ -82,16 +82,16 @@ def apply_summary_filter(activity, doc, action):
 
 
 class ActivityStream(Document):
-    def before_validate(self):
-        """Skip link validation only when the target is already gone."""
-        if not self.document_type or not self.document_name:
-            return
-        try:
-            if not frappe.db.exists(self.document_type, self.document_name):
+    def _validate_links(self):
+        """Let an activity row outlive the document it describes.
+        """
+        if self.document_type and self.document_name:
+            try:
+                if not frappe.db.exists(self.document_type, self.document_name):
+                    self.flags.ignore_links = True
+            except Exception:
                 self.flags.ignore_links = True
-        except Exception:
-            # An unknown/removed doctype cannot be validated either; keep the row.
-            self.flags.ignore_links = True
+        super()._validate_links()
 
 
 def mask_value(value, sensitive_keys):
