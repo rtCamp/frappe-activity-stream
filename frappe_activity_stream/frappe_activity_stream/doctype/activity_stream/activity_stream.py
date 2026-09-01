@@ -20,12 +20,6 @@ MAX_SUMMARY_LENGTH = 40
 
 def resolve_organization(doc=None):
     """Ask the producer app which organization this event belongs to.
-
-    The engine has no concept of an "organization". A business app registers
-    `activity_org_resolver` in its hooks.py and owns the whole definition, so this
-    file never needs to know about licenses, cookies or org doctypes. The document
-    is passed through when there is one, because a background job (a transcode
-    finishing, for example) has no request to read a selected org from.
     """
     for method in frappe.get_hooks("activity_org_resolver") or []:
         try:
@@ -38,14 +32,10 @@ def resolve_organization(doc=None):
 
 
 def resolve_action_group(doctype):
-    """Business grouping for a doctype, e.g. "Media" for Transcoder Job.
+    """Business grouping for a doctype, declared by producer apps as
+    `activity_action_group = {"Transcoder Job": "Media"}`.
 
-    Declared by producer apps so the engine needs no domain knowledge:
-
-        activity_action_group = {"Transcoder Job": "Media", "Subscription": "Billing"}
-
-    Only used for events captured from document hooks; explicitly logged events pass
-    their own group. Falls back to None, which the feed shows as ungrouped.
+    Only for hook-captured events; explicit ones pass their own group.
     """
     groups = frappe.get_hooks("activity_action_group") or {}
     values = groups.get(doctype) or []
@@ -53,22 +43,11 @@ def resolve_action_group(doctype):
 
 
 def apply_summary_filter(activity, doc, action):
-    """Let the producer app rewrite the auto-generated summary.
+    """Let the producer app rewrite the generated summary.
 
-    `generate_summary` can only describe a document generically, e.g.
-    "user updated Transcoder Job abc: is_archived from '0' to '1'". A producer app
-    registers a formatter in its hooks.py to turn that into something a person would
-    recognise ("Archived media Foo.mp4") without the engine knowing what media is:
-
-        activity_summary_formatter = {
-            "Transcoder Job": "godam_core.utils.activity_formatters.transcoder_job",
-            "*": "godam_core.utils.activity_formatters.fallback",
-        }
-
-    A formatter receives (doc, action, activity) and returns the summary string, or
-    a falsy value to leave the generated one alone. Doctype-specific formatters run
-    before wildcard ones, and the first non-empty result wins. A formatter that
-    raises is logged and skipped: it must never cost us the activity row.
+    Registered as `activity_summary_formatter = {"<DocType>": "path.to.formatter"}`, so
+    "user updated Transcoder Job abc: is_archived 0 to 1" can read as "Archived media
+    Foo.mp4" without the engine knowing what media is.
     """
     formatters = frappe.get_hooks("activity_summary_formatter") or {}
     methods = list(formatters.get(doc.doctype) or []) + list(formatters.get("*") or [])
@@ -86,16 +65,6 @@ def apply_summary_filter(activity, doc, action):
 class ActivityStream(Document):
     def before_validate(self):
         """Skip link validation only when the target is already gone.
-
-        `document_name` is a Dynamic Link and rows are written through `deferred_insert`,
-        so the INSERT happens when the queue is drained rather than at write time. By then
-        a delete event's target no longer exists, Frappe's link validation rejects the row,
-        and `deferred_insert` discards it with only a logger warning: the delete event
-        vanishes without a trace. An activity row has to outlive what it describes.
-
-        Scoped to the case that actually needs it rather than setting `ignore_links`
-        unconditionally, so `user`, `document_type` and a live `document_name` keep being
-        validated and a genuinely bad reference is still rejected.
         """
         if not self.document_type or not self.document_name:
             return
@@ -109,10 +78,6 @@ class ActivityStream(Document):
 
 def mask_value(value, sensitive_keys):
     """Recursively mask sensitive keys in nested dicts and lists.
-
-    A top-level-only walk is not enough: a request body is routinely
-    `{"payload": {"api_key": "..."}}`, and the secret is one level down. Since document
-    hooks are the primary capture path, this walk sees most of the traffic on the site.
     """
     if isinstance(value, dict):
         return {k: ("*****" if k in sensitive_keys else mask_value(v, sensitive_keys)) for k, v in value.items()}
@@ -163,7 +128,6 @@ def generate_summary(activity, is_single=False):
 
     summary_parts = []
 
-    # Handle Create, Update, Delete, Submit, Cancel
     if action == "Create":
         summary_parts.append(f"{user} created {doc_display}")
     elif action == "Delete":
@@ -174,11 +138,9 @@ def generate_summary(activity, is_single=False):
         summary_parts.append(f"{user} cancelled {doc_display}")
     elif action == "Update":
         changes = []
-        # Parent field changes
         for change in diff_data.get("changed", []):
             field, old, new = change[:3]
             changes.append(f"{field} from '{str(old)[:MAX_SUMMARY_LENGTH]}' to '{str(new)[:MAX_SUMMARY_LENGTH]}'")
-        # Table field changes
         for row_change in diff_data.get("row_changed", []):
             table_field = row_change[0]
             row_idx = row_change[1]
@@ -198,7 +160,6 @@ def generate_summary(activity, is_single=False):
         else:
             summary_parts.append(f"{user} updated {doc_display}")
 
-    # API/Background Job info
     if origin == "API Call" and activity.method:
         summary_parts.append(f"via API {activity.method}")
     elif origin == "Background Job" and activity.method:
@@ -274,7 +235,6 @@ def de_json(input_dict):
 
 def get_args_from_request(request):
     try:
-        # Prefer JSON body; fallback to form data, then query params
         args = {}
         if getattr(request, "is_json", False):
             args = request.get_json(silent=True) or {}
@@ -338,11 +298,8 @@ def log_access():
 
 
 def log_event(doc, action):
-    # Guard against recursive logging (e.g. Error Log inserts triggering log_create again)
-    # Use frappe.local so the flag is per-request/thread, not global
     if getattr(frappe.local, "_skip_activity_stream_logging", False):
         return
-    # Never log Activity Stream or Error Log to avoid infinite recursion
     if doc.doctype in ("Activity Stream", "Error Log"):
         return
     try:
@@ -351,7 +308,6 @@ def log_event(doc, action):
         ip_address = get_ip_address()
         if not should_log_activity(doc.doctype, action, user, ip_address):
             return
-        # check if this event is from a API call or a Background Job
         origin, path, args, method, referrer = get_event_details()
 
         doctype, docname = doc.doctype, doc.name
@@ -436,7 +392,6 @@ def log_event(doc, action):
         )
         activity.summary = generate_summary(activity, is_single)
         activity.summary = apply_summary_filter(activity, doc, action)
-        # before deferred_insert, run before_insert hooks
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
@@ -451,17 +406,6 @@ def log_create(doc, method):
 
 def log_update(doc, method):
     """Record a genuine update, and only a genuine update.
-
-    Frappe runs `on_update` as part of `insert()`: `Document.insert` sets
-    `flags.in_insert`, then calls `run_post_save_methods()`, which fires `on_update`
-    because `_action` is "save" (frappe/model/document.py). So a single `doc.insert()`
-    triggers both `after_insert` and `on_update`, and without this guard every insert
-    records twice: the real Create entry plus a bogus Update entry whose diff is the whole
-    document. That is what made adding one comment read as "commented on X" immediately
-    followed by "edited a comment on X".
-
-    A submit has the same shape: `_action == "submit"` runs `on_update` *and* `on_submit`,
-    so the Submit entry is the meaningful one and the Update is noise.
     """
     if doc.flags.in_insert:
         return

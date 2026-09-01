@@ -2,24 +2,9 @@
 # For license information, please see license.txt
 """Public engine API.
 
-Activity is captured two ways, and the split matters:
-
-1. **Document hooks** (`doc_events` in hooks.py) capture anything that goes through
-   the document lifecycle: `doc.insert()`, `doc.save()`, `doc.delete()`. This is the
-   default and covers most business actions for free. Which doctypes are captured is
-   controlled by the allow-list in **Activity Stream Settings** (`doctype_and_action`);
-   nothing is logged for a doctype that is not listed.
-
-2. **`log_activity()` below**, for writes that bypass the lifecycle entirely:
-   `frappe.db.set_value`, `frappe.db.sql`, `frappe.db.delete`. No document hook fires
-   for those, so the producer app has to say what happened itself.
-
-Producer apps should NOT import this module directly. They ship a thin local shim that
-imports it lazily and defensively, so that a missing `frappe_activity_stream` install
-can never break the action being logged.
-
-Rows land in the **Activity Stream** doctype. Everything here maps onto its existing
-fields; `organization` and `event_type` are the only additions.
+Document hooks capture anything going through the document lifecycle, gated by the
+allow-list in Activity Stream Settings. `log_activity()` is for writes that bypass it
+(`db.set_value`, `db.sql`, `db.delete`).
 """
 
 import json
@@ -36,10 +21,6 @@ from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_setti
 )
 from frappe_activity_stream.utils import get_ip_address
 
-# `action` on Activity Stream is a fixed Select, so an explicitly logged event still has
-# to land on one of its values while the semantic name travels in `event_type`
-# (action="Delete", event_type="media.deleted"). Rather than make every call site repeat
-# that, infer it from the event name and let a caller override when the guess is wrong.
 DEFAULT_ACTION = "Update"
 _ACTION_BY_SUFFIX = (
     (("deleted", "removed", "disconnected"), "Delete"),
@@ -48,11 +29,8 @@ _ACTION_BY_SUFFIX = (
 
 
 def _infer_action(event_type: str) -> str:
-    """Map `media.deleted` to "Delete", `post.created` to "Create", else "Update".
-
-    Only genuine lifecycle events are mapped. A status flip such as
-    `livestream.started`, `post.unpublished` or `subscription.cancelled` leaves the
-    document in place, so it is an Update however final it reads.
+    """
+    Map `media.deleted` to "Delete", `post.created` to "Create", else "Update".
     """
     suffix = (event_type or "").rsplit(".", 1)[-1]
     for suffixes, action in _ACTION_BY_SUFFIX:
@@ -108,23 +86,7 @@ def log_activity(
 ) -> None:
     """Record one activity event for a write that no document hook can see.
 
-    Only use this where the write bypasses the document lifecycle (`db.set_value`,
-    `db.sql`, `db.delete`). If the code path calls `doc.save()`, `doc.insert()` or
-    `doc.delete()`, the `doc_events` hooks already capture it and calling this too
-    would log the same action twice; shape the wording with an
-    `activity_summary_formatter` hook instead.
-
-    Unlike hook-captured events this is NOT filtered through the Settings allow-list:
-    the caller has already decided the event is worth recording. Only the global
-    `enabled` switch applies.
-
-    Unknown keyword arguments are accepted rather than raising, so that a producer app
-    pinned to an older or newer engine cannot break on a signature change. They are
-    logged: a typo or a never-implemented parameter is otherwise indistinguishable from
-    version skew, which is how every call site passed `target_label` to a function that
-    did not have the parameter and no one noticed.
-
-    Never raises.
+    Only for writes bypassing the document lifecycle.
     """
     if getattr(frappe.local, "_skip_activity_stream_logging", False):
         return
@@ -171,7 +133,6 @@ def log_activity(
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
-        # Logging must never break the action being logged.
         frappe.log_error(frappe.get_traceback(), f"log_activity failed: {event_type}")
     finally:
         frappe.local._skip_activity_stream_logging = False
@@ -179,11 +140,6 @@ def log_activity(
 
 def _count_with_or_filters(filters: list, or_filters: list) -> int:
     """DB-side COUNT for a filters + or_filters query.
-
-    `frappe.db.count` does not support or_filters, and passing an aggregate through
-    `get_all(fields=...)` is not portable: the raw "count(*) as total" string is
-    rejected on v16, while the v16 dict spec ({"COUNT": "*"}) is rejected on v15.
-    Query Builder works on both.
     """
     activity = frappe.qb.DocType("Activity Stream")
     query = frappe.qb.from_(activity).select(Count("*").as_("total"))
@@ -226,17 +182,7 @@ def get_activities(
     date_to: str | None = None,
     exclude_actors: list | None = None,
 ) -> dict:
-    """Org-scoped, paginated feed.
-
-    `exclude_actors` drops entries by actor. The engine has no opinion on who is worth
-    showing, so the consuming app decides: godam_core passes ["Administrator"] to keep
-    system and background-job activity out of an end-user feed.
-
-    Reads `Activity Stream` but returns the field names the consuming UI already uses,
-    so storage details do not leak into the API contract. `action_group` is accepted as
-    an alias for `action` for the same reason.
-
-    Permission is the caller's job: this returns whatever org it is given.
+    """Org-scoped, paginated feed. Permission is the caller's job.
     """
     action = action or action_group
 
@@ -308,17 +254,12 @@ def get_activities(
             "target_name": row.document_name,
             "target_label": row.target_label or row.document_name,
             "source": row.event_origin,
-            # `args` is deliberately NOT returned. For hook-captured events it holds the body
-            # of the request that made the change, so returning it would let any org manager
-            # read other members' request payloads, and nothing in the UI consumes it. If a
-            # drill-down ever needs it, add it back behind the recursive masker.
+            # `args` is NOT returned: it holds the request body, which would let any org
+            # manager read other members' payloads. Re-add only behind the masker.
         }
         for row in rows
     ]
 
-    # The filter dropdown is a convenience. If computing it fails, the feed itself must
-    # still render: this query taking the whole endpoint down with it is how a broken
-    # dropdown turned into an unusable Activities page once already.
     try:
         actions = get_available_actions(organization, exclude_actors=exclude_actors)
     except Exception:
@@ -330,22 +271,17 @@ def get_activities(
         "total_count": total_count,
         "total_pages": max(-(-total_count // page_size), 1),
         "available_actions": actions,
-        # Kept so an existing consumer reading `available_action_groups` still works.
+        # Alias kept for existing consumers.
         "available_action_groups": actions,
     }
 
 
 def get_available_actions(organization: str, exclude_actors: list | None = None) -> list:
-    """Distinct `action_group` values present for this org, for the feed's filter.
+    """Distinct `action_group` values for this org, for the feed's filter.
 
-    Falls back to nothing rather than to `action`: the raw lifecycle verbs
-    (Create/Update/Delete) are not useful as a business filter, and a row only lacks a
-    group when no producer app claimed its doctype.
+    Deliberately does not fall back to `action`: the raw lifecycle verbs are not a
+    useful business filter.
     """
-    # Query Builder, not get_all(fields=[...]): v16 rejects any field string that is not a
-    # plain, backticked, table-qualified or aliased name, so "distinct action_group as
-    # action_group" throws there while working on v15. Same portability trap as the count
-    # query above.
     activity = frappe.qb.DocType("Activity Stream")
     query = (
         frappe.qb.from_(activity).select(activity.action_group).distinct().where(activity.organization == organization)
@@ -359,27 +295,12 @@ def get_available_actions(organization: str, exclude_actors: list | None = None)
 def flush_pending_activity(max_records: int = 5000) -> int:
     """Write out activity rows still sitting in the deferred-insert queue.
 
-    Rows are written with `deferred_insert`, which only pushes them onto a Redis list.
-    Frappe drains every such list from `frappe.deferred_insert.save_to_db` on the
-    `0/15 * * * *` cron, which is where the "entries appear about fifteen minutes late"
-    behaviour comes from. The engine registers this on a one-minute cron instead (see
-    hooks.py) so the feed is at most about a minute behind.
+    Drains only the Activity Stream list, not `save_to_db()`, which walks every queued
+    doctype and would change the flush cadence for every other app on the site.
 
-    Deliberately drains **only** the Activity Stream list rather than calling
-    `save_to_db()`. That helper walks every queued doctype, so running it once a minute
-    would quietly change the flush cadence for every other app on the site. It also caps
-    itself at 500 records per doctype per call, which this does not need to.
-
-    Also called before `remap_organization`: a rename is a table UPDATE and cannot see rows
-    that are still in Redis.
-
-    Returns the number of rows written. Never raises: this runs from a scheduled job and
-    from an after-commit callback, and neither should fail because of the activity feed.
+    Also called before `remap_organization`: a rename is a table UPDATE and cannot see
+    rows still in Redis. Returns rows written. Never raises.
     """
-    # Runs once a minute on every site that has this app, including sites with no feed and
-    # no intention of having one. `enabled` is already read on every capture path, so
-    # checking it here makes the job free rather than a standing scheduler cost nobody
-    # asked for. A disabled site also queues nothing, so there is nothing to drain.
     try:
         if not getattr(get_settings_cached(), "enabled", 0):
             return 0
@@ -391,7 +312,6 @@ def flush_pending_activity(max_records: int = 5000) -> int:
     except Exception:
         return 0
 
-    # Same key `deferred_insert` pushes to: the unnamespaced form used by rpush.
     key = f"{queue_prefix}Activity Stream"
     written = 0
 
@@ -408,12 +328,9 @@ def flush_pending_activity(max_records: int = 5000) -> int:
                 records = [records]
 
             for record in records:
-                # insert_record logs and swallows its own failures, so one bad row cannot
-                # strand the rest of the queue.
                 insert_record(record, "Activity Stream")
                 written += 1
 
-            # Keep the transaction (and the undo log) bounded on a large backlog.
             if written and written % 500 == 0:
                 frappe.db.commit()  # nosemgrep
     except Exception:
@@ -428,20 +345,16 @@ def flush_pending_activity(max_records: int = 5000) -> int:
 def remap_organization(old_name: str, new_name: str, *, commit_between_batches: bool = False) -> int:
     """Repoint existing activity rows at an organization that was renamed.
 
-    `organization` is a Data column, not a Link, so the engine needs no knowledge of the
-    producer app's organization doctype. The price is that Frappe's rename cascade (which
-    only rewrites Link fields) never reaches it: after a rename the feed filters on the
-    new name, matches nothing, and looks as though every past activity was wiped.
+    `organization` is a Data column, so Frappe's rename cascade (Link fields only) never
+    reaches it and the feed would look wiped after a rename.
 
-    Driven entirely off `organization`, which is indexed. `document_name` is folded into
-    the same statement rather than a second pass: it is not indexed, so filtering on it
-    would full-scan every tenant's rows and lock them.
+    Driven off the indexed `organization`; `document_name` is folded into the same
+    statement because it is unindexed and filtering on it would scan every tenant's rows.
 
-    `commit_between_batches` must stay False while a transaction is open that the caller
-    may still need to roll back, notably inside an `after_rename` doc event where a
-    commit would make a partial rename durable.
+    `commit_between_batches` must stay False while a transaction the caller may roll back
+    is open, notably inside `after_rename` where it would make a partial rename durable.
 
-    Returns the number of rows updated. Never raises.
+    Returns rows updated. Never raises.
     """
     if not old_name or not new_name or old_name == new_name:
         return 0

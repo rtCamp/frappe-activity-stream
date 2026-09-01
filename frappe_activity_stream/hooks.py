@@ -159,15 +159,6 @@ on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stre
 # Scheduled Tasks
 # ---------------
 
-# `deferred_insert` only pushes rows onto a Redis list. Frappe drains every such list from
-# `frappe.deferred_insert.save_to_db`, but that runs on the `0/15 * * * *` cron, which is
-# the whole reason entries used to appear up to fifteen minutes late. Draining the Activity
-# Stream list ourselves every minute brings the feed to roughly a minute behind. One minute
-# is the floor: `get_scheduler_tick()` defaults to 60s, so no cron can fire more often.
-#
-# Frappe's own 15-minute job still runs and is harmless as a backstop; Redis `LPOP` is
-# atomic, so two drainers cannot insert the same row twice. Overlap is handled too:
-# ScheduledJobType.enqueue skips a run whose previous job is still queued.
 scheduler_events = {
     "cron": {"* * * * *": ["frappe_activity_stream.api.flush_pending_activity"]},
     "daily": ["frappe_activity_stream.tasks.clean_old_records.clear_old_records"],

@@ -8,9 +8,6 @@ from frappe.model.document import Document
 
 ACTIVITY_STREAM_SETTINGS_CACHE_KEY = "activity_stream_settings_cache"
 
-# Masked in every stored payload, on both capture paths. Deliberately a module constant and
-# not a field default: it needs no settings document, so a settings read failure can still
-# fall back to it rather than storing a payload in the clear.
 DEFAULT_SENSITIVE_KEYS = frozenset(
     {
         "pwd",
