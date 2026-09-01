@@ -8,7 +8,6 @@
   "user",
   "action",
   "summary",
-  "organization",
   "event_type",
   "action_group",
   "column_break_whrw",
@@ -100,7 +99,7 @@
    "fieldname": "event_origin",
    "fieldtype": "Select",
    "label": "Event Origin",
-   "options": "\nDesk\nAPI Call\nBackground Job\nWordPress\nSystem",
+   "options": "\nDesk\nAPI Call\nBackground Job\nSystem",
    "read_only": 1
   },
   {
@@ -154,14 +153,6 @@
    "fieldtype": "Text",
    "label": "Referrer",
    "read_only": 1
-  },
-  {
-   "fieldname": "organization",
-   "fieldtype": "Data",
-   "label": "Organization",
-   "read_only": 1,
-   "search_index": 1,
-   "description": "Owning organization, resolved by the producer app's activity_org_resolver hook."
   },
   {
    "fieldname": "event_type",

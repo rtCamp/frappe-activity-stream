@@ -15,6 +15,8 @@ from frappe.query_builder.functions import Count
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream import (
     get_event_details,
     remove_sensitive_data,
+    resolve_extra_fields,
+    writable_extras,
 )
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream_settings.activity_stream_settings import (
     get_settings_cached,
@@ -55,19 +57,6 @@ def _mask_sensitive(meta: dict | None) -> dict | None:
     return remove_sensitive_data(meta)
 
 
-def _resolve_organization(organization: str | None):
-    if organization:
-        return organization
-    for method in frappe.get_hooks("activity_org_resolver") or []:
-        try:
-            org = frappe.get_attr(method)(None)
-            if org:
-                return org
-        except Exception:
-            frappe.log_error(frappe.get_traceback(), "activity_org_resolver failed")
-    return None
-
-
 def log_activity(
     event_type: str,
     *,
@@ -76,17 +65,19 @@ def log_activity(
     target_name: str | None = None,
     target_label: str | None = None,
     summary: str | None = None,
-    organization: str | None = None,
     actor: str | None = None,
     actor_name: str | None = None,
     action_group: str | None = None,
     meta: dict | None = None,
     source: str | None = None,
+    extra_fields: dict | None = None,
     **_ignored,
 ) -> None:
     """Record one activity event for a write that no document hook can see.
 
-    Only for writes bypassing the document lifecycle.
+    Only for writes bypassing the document lifecycle. `extra_fields` sets
+    producer-owned Custom Fields; anything the
+    caller omits is filled in from the `activity_extra_fields` hooks.
     """
     if getattr(frappe.local, "_skip_activity_stream_logging", False):
         return
@@ -116,7 +107,6 @@ def log_activity(
                 "action": action,
                 "event_type": event_type,
                 "action_group": action_group,
-                "organization": _resolve_organization(organization),
                 "summary": summary,
                 "document_type": target_doctype,
                 "document_name": target_name,
@@ -130,6 +120,10 @@ def log_activity(
                 "args": json.dumps(_mask_sensitive(meta) or {}, default=str),
             }
         )
+        resolved = resolve_extra_fields(None)
+        resolved.update(extra_fields or {})
+        activity.update(writable_extras(resolved))
+
         activity.run_method("before_insert")
         activity.deferred_insert()
     except Exception:
@@ -139,8 +133,7 @@ def log_activity(
 
 
 def _count_with_or_filters(filters: list, or_filters: list) -> int:
-    """DB-side COUNT for a filters + or_filters query.
-    """
+    """DB-side COUNT for a filters + or_filters query."""
     activity = frappe.qb.DocType("Activity Stream")
     query = frappe.qb.from_(activity).select(Count("*").as_("total"))
 
@@ -169,7 +162,7 @@ def _count_with_or_filters(filters: list, or_filters: list) -> int:
 
 
 def get_activities(
-    organization: str,
+    scope: dict | None = None,
     page: int = 1,
     page_size: int = 30,
     search: str = "",
@@ -182,11 +175,11 @@ def get_activities(
     date_to: str | None = None,
     exclude_actors: list | None = None,
 ) -> dict:
-    """Org-scoped, paginated feed. Permission is the caller's job.
+    """Paginated feed. Permission and scoping are the caller's job.
     """
     action = action or action_group
 
-    filters = [("organization", "=", organization)]
+    filters = [(field, "=", value) for field, value in (scope or {}).items()]
     if exclude_actors:
         filters.append(("user", "not in", list(exclude_actors)))
     if action:
@@ -261,7 +254,7 @@ def get_activities(
     ]
 
     try:
-        actions = get_available_actions(organization, exclude_actors=exclude_actors)
+        actions = get_available_actions(scope, exclude_actors=exclude_actors)
     except Exception:
         frappe.log_error(frappe.get_traceback(), "activity get_available_actions failed")
         actions = []
@@ -276,16 +269,16 @@ def get_activities(
     }
 
 
-def get_available_actions(organization: str, exclude_actors: list | None = None) -> list:
-    """Distinct `action_group` values for this org, for the feed's filter.
+def get_available_actions(scope: dict | None = None, exclude_actors: list | None = None) -> list:
+    """Distinct `action_group` values in scope, for the feed's filter.
 
     Deliberately does not fall back to `action`: the raw lifecycle verbs are not a
     useful business filter.
     """
     activity = frappe.qb.DocType("Activity Stream")
-    query = (
-        frappe.qb.from_(activity).select(activity.action_group).distinct().where(activity.organization == organization)
-    )
+    query = frappe.qb.from_(activity).select(activity.action_group).distinct()
+    for field, value in (scope or {}).items():
+        query = query.where(activity[field] == value)
     if exclude_actors:
         query = query.where(activity.user.notin(list(exclude_actors)))
     rows = query.run(as_dict=True)
@@ -298,7 +291,7 @@ def flush_pending_activity(max_records: int = 5000) -> int:
     Drains only the Activity Stream list, not `save_to_db()`, which walks every queued
     doctype and would change the flush cadence for every other app on the site.
 
-    Also called before `remap_organization`: a rename is a table UPDATE and cannot see
+    Also called before `remap_field`: an UPDATE cannot see
     rows still in Redis. Returns rows written. Never raises.
     """
     try:
@@ -342,52 +335,56 @@ def flush_pending_activity(max_records: int = 5000) -> int:
     return written
 
 
-def remap_organization(old_name: str, new_name: str, *, commit_between_batches: bool = False) -> int:
-    """Repoint existing activity rows at an organization that was renamed.
-
-    `organization` is a Data column, so Frappe's rename cascade (Link fields only) never
-    reaches it and the feed would look wiped after a rename.
-
-    Driven off the indexed `organization`; `document_name` is folded into the same
-    statement because it is unindexed and filtering on it would scan every tenant's rows.
-
-    `commit_between_batches` must stay False while a transaction the caller may roll back
-    is open, notably inside `after_rename` where it would make a partial rename durable.
+def remap_field(
+    fieldname: str,
+    old_value: str,
+    new_value: str,
+    *,
+    remap_target_name: bool = False,
+    commit_between_batches: bool = False,
+) -> int:
+    """Rewrite one column's value across existing activity rows.
 
     Returns rows updated. Never raises.
     """
-    if not old_name or not new_name or old_name == new_name:
+    if not fieldname or not old_value or not new_value or old_value == new_value:
         return 0
+
+    try:
+        if fieldname not in {df.fieldname for df in frappe.get_meta("Activity Stream").fields}:
+            return 0
+    except Exception:
+        return 0
+
+    target_clause = ""
+    if remap_target_name:
+        target_clause = ", `document_name` = CASE WHEN `document_name` = %(old)s THEN %(new)s ELSE `document_name` END"
 
     try:
         updated = 0
         for _ in range(REMAP_MAX_BATCHES):
-            remaining = frappe.db.count("Activity Stream", {"organization": old_name})
+            remaining = frappe.db.count("Activity Stream", {fieldname: old_value})
             if not remaining:
                 break
 
-            frappe.db.sql(
-                """UPDATE `tabActivity Stream`
-                   SET `organization` = %(new)s,
-                       `document_name` = CASE
-                           WHEN `document_type` = 'Organization' AND `document_name` = %(old)s
-                           THEN %(new)s ELSE `document_name` END
-                   WHERE `organization` = %(old)s
-                   LIMIT %(limit)s""",
-                {"old": old_name, "new": new_name, "limit": REMAP_BATCH_SIZE},
+            statement = (
+                f"UPDATE `tabActivity Stream` SET `{fieldname}` = %(new)s{target_clause} "
+                f"WHERE `{fieldname}` = %(old)s LIMIT %(limit)s"
             )
+            # nosemgrep
+            frappe.db.sql(statement, {"old": old_value, "new": new_value, "limit": REMAP_BATCH_SIZE})
             updated += min(remaining, REMAP_BATCH_SIZE)
 
             if commit_between_batches:
                 frappe.db.commit()  # nosemgrep
         else:
             frappe.log_error(
-                f"activity remap_organization hit the batch ceiling with rows still on "
-                f"'{old_name}'; re-run remap_organization('{old_name}', '{new_name}')",
+                f"activity remap_field hit the batch ceiling with rows still on "
+                f"{fieldname}='{old_value}'; re-run remap_field()",
                 "activity remap incomplete",
             )
 
         return updated
     except Exception:
-        frappe.log_error(frappe.get_traceback(), f"activity remap_organization failed: {old_name} -> {new_name}")
+        frappe.log_error(frappe.get_traceback(), f"activity remap_field failed: {fieldname} {old_value} -> {new_value}")
         return 0

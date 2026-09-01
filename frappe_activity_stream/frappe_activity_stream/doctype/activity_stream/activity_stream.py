@@ -18,17 +18,36 @@ from frappe_activity_stream.utils import get_ip_address
 MAX_SUMMARY_LENGTH = 40
 
 
-def resolve_organization(doc=None):
-    """Ask the producer app which organization this event belongs to.
+def resolve_extra_fields(doc=None):
+    """Producer-supplied values for fields this app does not define itself.
+
+    A producer registers `activity_extra_fields` and returns {fieldname: value}, so
+    anything it added to Activity Stream as a Custom Field can be stamped without the
+    engine knowing the concept. Later hooks win a key clash.
     """
-    for method in frappe.get_hooks("activity_org_resolver") or []:
+    extras = {}
+    for method in frappe.get_hooks("activity_extra_fields") or []:
         try:
-            org = frappe.get_attr(method)(doc)
-            if org:
-                return org
+            values = frappe.get_attr(method)(doc)
+            if values:
+                extras.update(values)
         except Exception:
-            frappe.log_error(frappe.get_traceback(), "activity_org_resolver failed")
-    return None
+            frappe.log_error(frappe.get_traceback(), f"activity_extra_fields failed: {method}")
+    return extras
+
+
+def writable_extras(extras):
+    """Drop keys that are not fields on Activity Stream.
+
+    A producer whose Custom Field is not installed is then a no-op, not an error.
+    """
+    if not extras:
+        return {}
+    try:
+        known = {df.fieldname for df in frappe.get_meta("Activity Stream").fields}
+    except Exception:
+        return {}
+    return {k: v for k, v in extras.items() if k in known}
 
 
 def resolve_action_group(doctype):
@@ -64,8 +83,7 @@ def apply_summary_filter(activity, doc, action):
 
 class ActivityStream(Document):
     def before_validate(self):
-        """Skip link validation only when the target is already gone.
-        """
+        """Skip link validation only when the target is already gone."""
         if not self.document_type or not self.document_name:
             return
         try:
@@ -77,8 +95,7 @@ class ActivityStream(Document):
 
 
 def mask_value(value, sensitive_keys):
-    """Recursively mask sensitive keys in nested dicts and lists.
-    """
+    """Recursively mask sensitive keys in nested dicts and lists."""
     if isinstance(value, dict):
         return {k: ("*****" if k in sensitive_keys else mask_value(v, sensitive_keys)) for k, v in value.items()}
     if isinstance(value, list):
@@ -380,7 +397,6 @@ def log_event(doc, action):
                 "datetime": frappe.utils.now_datetime(),
                 "document_type": doctype,
                 "document_name": docname,
-                "organization": resolve_organization(doc),
                 "action_group": resolve_action_group(doctype),
                 "event_origin": origin,
                 "method": path,
@@ -390,6 +406,7 @@ def log_event(doc, action):
                 "diff": frappe.as_json(diff, indent=None, separators=(",", ":")) if diff else None,
             }
         )
+        activity.update(writable_extras(resolve_extra_fields(doc)))
         activity.summary = generate_summary(activity, is_single)
         activity.summary = apply_summary_filter(activity, doc, action)
         activity.run_method("before_insert")
@@ -405,8 +422,7 @@ def log_create(doc, method):
 
 
 def log_update(doc, method):
-    """Record a genuine update, and only a genuine update.
-    """
+    """Record a genuine update, and only a genuine update."""
     if doc.flags.in_insert:
         return
     if getattr(doc, "_action", None) == "submit":
