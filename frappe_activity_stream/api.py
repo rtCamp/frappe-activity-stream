@@ -161,6 +161,20 @@ def _count_with_or_filters(filters: list, or_filters: list) -> int:
     return result[0].total if result else 0
 
 
+def _readable_docname(doctype: str | None, docname: str | None) -> str | None:
+    """The docname when the doctype names its records from their own data, else None.
+
+    An empty autoname means hash in Frappe, so both count as opaque.
+    """
+    if not doctype or not docname:
+        return None
+    try:
+        autoname = (frappe.get_meta(doctype).autoname or "").lower()
+    except Exception:
+        return None
+    return docname if autoname and not autoname.startswith("hash") else None
+
+
 def get_activities(
     scope: dict | None = None,
     page: int = 1,
@@ -244,7 +258,7 @@ def get_activities(
             "event_type": row.event_type,
             "target_doctype": row.document_type,
             "target_name": row.document_name,
-            "target_label": row.target_label or row.document_name,
+            "target_label": row.target_label or _readable_docname(row.document_type, row.document_name),
             "source": row.event_origin,
             # `args` is NOT returned: it holds the request body, which would let any org
             # manager read other members' payloads. Re-add only behind the masker.
@@ -285,8 +299,7 @@ def get_available_actions(scope: dict | None = None, exclude_actors: list | None
 
 
 def _insert_activity(record: dict) -> None:
-    """Write one queued row, bypassing permissions.
-    """
+    """Write one queued row, bypassing permissions."""
     record = dict(record)
     record["doctype"] = "Activity Stream"
     frappe.get_doc(record).insert(ignore_permissions=True)

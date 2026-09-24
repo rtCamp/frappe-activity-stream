@@ -61,6 +61,27 @@ def resolve_action_group(doctype):
     return values[-1] if values else None
 
 
+def resolve_target_label(doc):
+    """A readable name for the document an event is about, or None.
+
+    The doctype's title field, else the docname when it is derived from the record's own
+    data. An empty autoname means hash in Frappe, so both count as opaque.
+    """
+    try:
+        meta = doc.meta
+        title_field = meta.get_title_field()
+        if title_field and title_field != "name":
+            value = doc.get(title_field)
+            if value and str(value).strip():
+                return str(value).strip()[:140]
+        autoname = (meta.autoname or "").lower()
+        if autoname and not autoname.startswith("hash"):
+            return doc.name
+    except Exception:
+        return None
+    return None
+
+
 def apply_summary_filter(activity, doc, action):
     """Let the producer app rewrite the generated summary.
 
@@ -129,11 +150,10 @@ def generate_summary(activity, is_single=False):
     action = activity.action
     user = activity.user
     doctype = activity.document_type
-    docname = activity.document_name
     diff = activity.diff
 
-    # For single doctypes, docname is same as doctype, so use only doctype in summary
-    doc_display = doctype if is_single else f"{doctype} {docname}"
+    label = activity.get("target_label")
+    doc_display = doctype if is_single else (f"{doctype} {label}" if label else doctype)
 
     # Parse diff JSON
     try:
@@ -401,6 +421,7 @@ def log_event(doc, action):
                 "datetime": frappe.utils.now_datetime(),
                 "document_type": doctype,
                 "document_name": docname,
+                "target_label": resolve_target_label(doc),
                 "action_group": resolve_action_group(doctype),
                 "event_origin": origin,
                 "method": path,
