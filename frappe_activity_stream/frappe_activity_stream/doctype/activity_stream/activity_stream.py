@@ -327,12 +327,15 @@ def log_access():
         frappe.log_error(frappe.get_traceback(), f"Error logging access activity for {user}")
 
 
+USER_COMMENT_TYPES = ("Comment", "Like")
+
+
 def log_event(doc, action):
     if getattr(frappe.local, "_skip_activity_stream_logging", False):
         return
     if doc.doctype in ("Activity Stream", "Error Log"):
         return
-    if doc.doctype == "Comment" and (doc.get("comment_type") or "") != "Comment":
+    if doc.doctype == "Comment" and (doc.get("comment_type") or "") not in USER_COMMENT_TYPES:
         return
     try:
         frappe.local._skip_activity_stream_logging = True
