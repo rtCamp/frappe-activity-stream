@@ -166,7 +166,7 @@
    "fieldname": "action_group",
    "fieldtype": "Select",
    "label": "Action Group",
-   "options": "\nMedia\nContent\nComment\nMembership\nOrganization\nBilling\nAccount\nAuth\nOther",
+   "options": "\nMedia\nContent\nComment\nMembership\nOrganization\nBilling\nAccount\nAuth\nModeration\nOther",
    "read_only": 1,
    "search_index": 1,
    "description": "Business grouping used by the activity feed filter. Set explicitly when logging, or derived per doctype by the producer app's activity_action_group hook."
@@ -182,7 +182,7 @@
  "in_create": 1,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-25 11:28:10.702070",
+ "modified": "2026-09-28 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Frappe Activity Stream",
  "name": "Activity Stream",
