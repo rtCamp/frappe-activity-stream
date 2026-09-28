@@ -160,6 +160,7 @@ on_logout = "frappe_activity_stream.frappe_activity_stream.doctype.activity_stre
 # ---------------
 
 scheduler_events = {
+    "cron": {"* * * * *": ["frappe_activity_stream.api.flush_pending_activity"]},
     "daily": ["frappe_activity_stream.tasks.clean_old_records.clear_old_records"],
 }
 
@@ -193,10 +194,8 @@ ignore_links_on_delete = ["Activity Stream"]
 
 # Request Events
 # ----------------
-before_request = [
-    "frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_access"
-]
-# after_request = ["frappe_activity_stream.utils.after_request"]
+
+before_request = ["frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream.log_access"]
 
 # Job Events
 # ----------

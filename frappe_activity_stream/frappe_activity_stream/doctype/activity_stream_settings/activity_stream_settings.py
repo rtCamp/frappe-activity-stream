@@ -8,24 +8,25 @@ from frappe.model.document import Document
 
 ACTIVITY_STREAM_SETTINGS_CACHE_KEY = "activity_stream_settings_cache"
 
+DEFAULT_SENSITIVE_KEYS = frozenset(
+    {
+        "pwd",
+        "password",
+        "secret",
+        "token",
+        "api_key",
+        "access_token",
+    }
+)
+
 
 class ActivityStreamSettings(Document):
     def get_sensitive_keys(self):
         """
         Returns a list of sensitive keys to be masked in activity stream logs.
         """
-        default_sensitive_keys = {
-            "pwd",
-            "password",
-            "secret",
-            "token",
-            "api_key",
-            "access_token",
-        }
-        user_defined_keys = set(
-            key.strip() for key in (self.sensitive_keys or "").split(",") if key.strip()
-        )
-        return default_sensitive_keys.union(user_defined_keys)
+        user_defined_keys = set(key.strip() for key in (self.sensitive_keys or "").split(",") if key.strip())
+        return set(DEFAULT_SENSITIVE_KEYS) | user_defined_keys
 
 
 def get_settings_cached():
@@ -59,9 +60,7 @@ def should_log_activity(doc_type, action, user, ip_address):
     allow_list = settings.get("doctype_and_action") or []
     # TODO: add user and ip address based filtering
     for entry in allow_list:
-        if entry.document_type == doc_type and (
-            entry.action == "All" or entry.action == action
-        ):
+        if entry.document_type == doc_type and (entry.action == "All" or entry.action == action):
             return True
     return False
 
@@ -72,14 +71,10 @@ def should_log_path(path: str, method: str) -> bool:
     type_of_requests_to_log = settings.get("type_of_requests_to_log", None)
     if type_of_requests_to_log and type_of_requests_to_log.strip():
         type_of_requests_to_log = type_of_requests_to_log.split(",")
-        type_of_requests_to_log = [
-            req_type.strip() for req_type in type_of_requests_to_log
-        ]
+        type_of_requests_to_log = [req_type.strip() for req_type in type_of_requests_to_log]
         if method not in type_of_requests_to_log:
             return False
-    ignore_patterns = [
-        pattern.strip() for pattern in ignore_patterns.split("\n") if pattern.strip()
-    ]
+    ignore_patterns = [pattern.strip() for pattern in ignore_patterns.split("\n") if pattern.strip()]
     for pattern in ignore_patterns:
         if re.search(pattern, path):
             return False
