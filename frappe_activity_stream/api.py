@@ -188,13 +188,21 @@ def get_activities(
     date_from: str | None = None,
     date_to: str | None = None,
     exclude_actors: list | None = None,
+    exclude_documents: list | None = None,
 ) -> dict:
-    """Paginated feed. Permission and scoping are the caller's job."""
+    """Paginated feed. Permission and scoping are the caller's job.
+
+    ``exclude_documents`` leaves out every row about those documents (by name), in the
+    query itself, so the total and a search never count them either: a caller hides the
+    rows about documents its reader may not see.
+    """
     action = action or action_group
 
     filters = [(field, "=", value) for field, value in (scope or {}).items()]
     if exclude_actors:
         filters.append(("user", "not in", list(exclude_actors)))
+    if exclude_documents:
+        filters.append(("document_name", "not in", list(exclude_documents)))
     if action:
         filters.append(("action_group", "=", action))
     if event_type:

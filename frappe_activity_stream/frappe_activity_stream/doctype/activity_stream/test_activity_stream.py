@@ -64,3 +64,15 @@ class TestActivityStream(FrappeTestCase):
         row = self._row(document_type=None, document_name=None, summary="no target")
         row.insert(ignore_permissions=True)
         self.assertTrue(frappe.db.exists("Activity Stream", row.name))
+
+    def test_excluded_documents_are_left_out_of_rows_count_and_search(self):
+        from frappe_activity_stream.api import get_activities
+
+        tag = frappe.generate_hash(length=8)
+        for name in (f"shown-{tag}", f"hidden-{tag}"):
+            self._row(document_type="Note", document_name=name, summary=f"edited {name} {tag}").insert(ignore_permissions=True)
+
+        feed = get_activities(search=tag, exclude_documents=[f"hidden-{tag}"])
+        self.assertEqual([row["target_name"] for row in feed["data"]], [f"shown-{tag}"])
+        self.assertEqual(feed["total_count"], 1)
+        self.assertEqual(get_activities(search=f"hidden-{tag}", exclude_documents=[f"hidden-{tag}"])["total_count"], 0)
