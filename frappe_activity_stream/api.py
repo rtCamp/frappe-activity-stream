@@ -135,8 +135,14 @@ def log_activity(
 def _count_with_or_filters(filters: list, or_filters: list) -> int:
     """DB-side COUNT for a filters + or_filters query."""
     activity = frappe.qb.DocType("Activity Stream")
-    query = frappe.qb.from_(activity).select(Count("*").as_("total"))
+    query = _where(frappe.qb.from_(activity).select(Count("*").as_("total")), activity, filters, or_filters)
+    result = query.run(as_dict=True)
+    return result[0].total if result else 0
 
+
+def _where(query, activity, filters: list, or_filters: list):
+    """Apply the feed's filters. ``not in`` keeps rows whose field is empty, and its value
+    may be a list or a subquery selecting the values to leave out."""
     for field, operator, value in filters:
         if operator == "=":
             query = query.where(activity[field] == value)
@@ -147,7 +153,7 @@ def _count_with_or_filters(filters: list, or_filters: list) -> int:
         elif operator == "<=":
             query = query.where(activity[field] <= value)
         elif operator == "not in":
-            query = query.where(activity[field].notin(value))
+            query = query.where(activity[field].isnull() | activity[field].notin(value))
 
     if or_filters:
         condition = None
@@ -156,9 +162,7 @@ def _count_with_or_filters(filters: list, or_filters: list) -> int:
             condition = clause if condition is None else (condition | clause)
         if condition is not None:
             query = query.where(condition)
-
-    result = query.run(as_dict=True)
-    return result[0].total if result else 0
+    return query
 
 
 def _readable_docname(doctype: str | None, docname: str | None) -> str | None:
@@ -192,9 +196,11 @@ def get_activities(
 ) -> dict:
     """Paginated feed. Permission and scoping are the caller's job.
 
-    ``exclude_documents`` leaves out every row about those documents (by name), in the
-    query itself, so the total and a search never count them either: a caller hides the
-    rows about documents its reader may not see.
+    ``exclude_documents`` leaves out every row about those documents, in the query
+    itself, so the total and a search never count them either: a caller hides the rows
+    about documents its reader may not see. Each item is a document name or a query
+    builder subquery selecting names, so a caller can exclude a large set without
+    listing it.
     """
     action = action or action_group
 
@@ -202,7 +208,10 @@ def get_activities(
     if exclude_actors:
         filters.append(("user", "not in", list(exclude_actors)))
     if exclude_documents:
-        filters.append(("document_name", "not in", list(exclude_documents)))
+        names = [item for item in exclude_documents if isinstance(item, str)]
+        if names:
+            filters.append(("document_name", "not in", names))
+        filters.extend(("document_name", "not in", item) for item in exclude_documents if not isinstance(item, str))
     if action:
         filters.append(("action_group", "=", action))
     if event_type:
@@ -230,28 +239,28 @@ def get_activities(
     page_size = min(max(int(page_size or 30), 1), 100)
     direction = "asc" if str(order).lower() == "asc" else "desc"
 
-    rows = frappe.get_all(
-        "Activity Stream",
-        filters=[list(f) for f in filters],
-        or_filters=[list(f) for f in or_filters] or None,
-        fields=[
-            "name",
-            "datetime",
-            "summary",
-            "user",
-            "user_name",
-            "action",
-            "action_group",
-            "event_type",
-            "document_type",
-            "document_name",
-            "target_label",
-            "event_origin",
-        ],
-        order_by=f"datetime {direction}",
-        start=(page - 1) * page_size,
-        page_length=page_size,
-        ignore_permissions=True,
+    activity = frappe.qb.DocType("Activity Stream")
+    fields = [
+        "name",
+        "datetime",
+        "summary",
+        "user",
+        "user_name",
+        "action",
+        "action_group",
+        "event_type",
+        "document_type",
+        "document_name",
+        "target_label",
+        "event_origin",
+    ]
+    order = frappe.qb.asc if direction == "asc" else frappe.qb.desc
+    rows = (
+        _where(frappe.qb.from_(activity).select(*(activity[f] for f in fields)), activity, filters, or_filters)
+        .orderby(activity.datetime, order=order)
+        .limit(page_size)
+        .offset((page - 1) * page_size)
+        .run(as_dict=True)
     )
 
     data = [

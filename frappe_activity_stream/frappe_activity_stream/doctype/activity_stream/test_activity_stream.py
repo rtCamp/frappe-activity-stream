@@ -70,9 +70,30 @@ class TestActivityStream(FrappeTestCase):
 
         tag = frappe.generate_hash(length=8)
         for name in (f"shown-{tag}", f"hidden-{tag}"):
-            self._row(document_type="Note", document_name=name, summary=f"edited {name} {tag}").insert(ignore_permissions=True)
+            self._row(document_type="Note", document_name=name, summary=f"edited {name} {tag}").insert(
+                ignore_permissions=True
+            )
 
         feed = get_activities(search=tag, exclude_documents=[f"hidden-{tag}"])
         self.assertEqual([row["target_name"] for row in feed["data"]], [f"shown-{tag}"])
         self.assertEqual(feed["total_count"], 1)
         self.assertEqual(get_activities(search=f"hidden-{tag}", exclude_documents=[f"hidden-{tag}"])["total_count"], 0)
+
+    def test_a_subquery_excludes_without_listing_names(self):
+        from frappe_activity_stream.api import get_activities
+
+        tag = frappe.generate_hash(length=8)
+        for name in (f"shown-{tag}", f"hidden-{tag}"):
+            self._row(document_type="Note", document_name=name, summary=f"edited {name} {tag}").insert(
+                ignore_permissions=True
+            )
+        self._row(document_type=None, document_name=None, summary=f"no target {tag}").insert(ignore_permissions=True)
+
+        activity = frappe.qb.DocType("Activity Stream")
+        hidden = (
+            frappe.qb.from_(activity).select(activity.document_name).where(activity.document_name == f"hidden-{tag}")
+        )
+        feed = get_activities(search=tag, exclude_documents=[hidden])
+        # The row about no document stays: NOT IN must not drop empty fields.
+        self.assertEqual(sorted(str(row["target_name"]) for row in feed["data"]), ["None", f"shown-{tag}"])
+        self.assertEqual(feed["total_count"], 2)
