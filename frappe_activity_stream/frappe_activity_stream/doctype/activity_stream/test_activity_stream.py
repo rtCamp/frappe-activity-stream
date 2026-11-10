@@ -97,3 +97,52 @@ class TestActivityStream(FrappeTestCase):
         # The row about no document stays: NOT IN must not drop empty fields.
         self.assertEqual(sorted(str(row["target_name"]) for row in feed["data"]), ["None", f"shown-{tag}"])
         self.assertEqual(feed["total_count"], 2)
+
+    def test_names_and_subqueries_mixed_in_one_list(self):
+        from frappe_activity_stream.api import get_activities
+
+        tag = frappe.generate_hash(length=8)
+        for name in (f"shown-{tag}", f"by-name-{tag}", f"by-query-{tag}"):
+            self._row(document_type="Note", document_name=name, summary=f"edited {name} {tag}").insert(
+                ignore_permissions=True
+            )
+
+        activity = frappe.qb.DocType("Activity Stream")
+        by_query = (
+            frappe.qb.from_(activity).select(activity.document_name).where(activity.document_name == f"by-query-{tag}")
+        )
+        feed = get_activities(search=tag, exclude_documents=[f"by-name-{tag}", by_query])
+        self.assertEqual([row["target_name"] for row in feed["data"]], [f"shown-{tag}"])
+        self.assertEqual(feed["total_count"], 1)
+
+    def test_exclusion_items_must_be_names_or_subqueries(self):
+        from frappe_activity_stream.api import get_activities
+
+        for bad in (None, 42):
+            with self.subTest(item=bad), self.assertRaises(TypeError):
+                get_activities(exclude_documents=["a-name", bad])
+
+    def test_excluding_actors_keeps_rows_with_no_user_in_rows_and_count(self):
+        """``not in`` keeps empty fields, so the count agrees with the rows.
+
+        The count used to drop rows with no ``user`` while the rows query kept them.
+        """
+        from frappe_activity_stream.api import get_activities
+
+        tag = frappe.generate_hash(length=8)
+        self._row(summary=f"by admin {tag}").insert(ignore_permissions=True)
+        no_user = self._row(summary=f"by nobody {tag}")
+        no_user.insert(ignore_permissions=True)
+        frappe.db.set_value("Activity Stream", no_user.name, "user", None, update_modified=False)
+
+        feed = get_activities(search=tag, exclude_actors=["Administrator"])
+        self.assertEqual([row["name"] for row in feed["data"]], [no_user.name])
+        self.assertEqual(feed["total_count"], 1)
+
+    def test_an_unknown_filter_operator_is_refused(self):
+        from frappe_activity_stream.api import _count_with_or_filters
+
+        with self.assertRaises(ValueError):
+            _count_with_or_filters([("user", "!=", "Administrator")], [])
+        with self.assertRaises(ValueError):
+            _count_with_or_filters([], [("user", "!=", "Administrator")])

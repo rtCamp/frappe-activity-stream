@@ -11,6 +11,7 @@ import json
 
 import frappe
 from frappe.query_builder.functions import Count
+from pypika.queries import QueryBuilder
 
 from frappe_activity_stream.frappe_activity_stream.doctype.activity_stream.activity_stream import (
     get_event_details,
@@ -154,15 +155,41 @@ def _where(query, activity, filters: list, or_filters: list):
             query = query.where(activity[field] <= value)
         elif operator == "not in":
             query = query.where(activity[field].isnull() | activity[field].notin(value))
+        else:
+            raise ValueError(f"Unsupported activity filter operator: {operator!r}")
 
     if or_filters:
         condition = None
         for field, operator, value in or_filters:
-            clause = activity[field].like(value) if operator == "like" else activity[field] == value
+            if operator == "like":
+                clause = activity[field].like(value)
+            elif operator == "=":
+                clause = activity[field] == value
+            else:
+                raise ValueError(f"Unsupported activity or-filter operator: {operator!r}")
             condition = clause if condition is None else (condition | clause)
         if condition is not None:
             query = query.where(condition)
     return query
+
+
+def _split_exclusions(items: list) -> tuple[list[str], list[QueryBuilder]]:
+    """Split ``exclude_documents`` into plain names and subqueries; refuse anything else.
+
+    Without the check a ``None`` or an int would reach the query builder as a
+    "subquery" and fail there with an unclear error.
+    """
+    names, subqueries = [], []
+    for item in items:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, QueryBuilder):
+            subqueries.append(item)
+        else:
+            raise TypeError(
+                f"exclude_documents items must be document names or query builder subqueries, got {type(item).__name__}"
+            )
+    return names, subqueries
 
 
 def _readable_docname(doctype: str | None, docname: str | None) -> str | None:
@@ -200,7 +227,12 @@ def get_activities(
     itself, so the total and a search never count them either: a caller hides the rows
     about documents its reader may not see. Each item is a document name or a query
     builder subquery selecting names, so a caller can exclude a large set without
-    listing it.
+    listing it. Anything else raises ``TypeError``.
+
+    Rows are matched on ``document_name`` alone, not on doctype and name, so excluding
+    a name also drops rows about a document of another doctype with the same name.
+    Hash-named doctypes make that unlikely; with doctypes named from their own data
+    (a title, an email), select names from one doctype only and expect the overlap.
     """
     action = action or action_group
 
@@ -208,10 +240,10 @@ def get_activities(
     if exclude_actors:
         filters.append(("user", "not in", list(exclude_actors)))
     if exclude_documents:
-        names = [item for item in exclude_documents if isinstance(item, str)]
+        names, subqueries = _split_exclusions(exclude_documents)
         if names:
             filters.append(("document_name", "not in", names))
-        filters.extend(("document_name", "not in", item) for item in exclude_documents if not isinstance(item, str))
+        filters.extend(("document_name", "not in", subquery) for subquery in subqueries)
     if action:
         filters.append(("action_group", "=", action))
     if event_type:
@@ -254,10 +286,10 @@ def get_activities(
         "target_label",
         "event_origin",
     ]
-    order = frappe.qb.asc if direction == "asc" else frappe.qb.desc
+    sort_order = frappe.qb.asc if direction == "asc" else frappe.qb.desc
     rows = (
         _where(frappe.qb.from_(activity).select(*(activity[f] for f in fields)), activity, filters, or_filters)
-        .orderby(activity.datetime, order=order)
+        .orderby(activity.datetime, order=sort_order)
         .limit(page_size)
         .offset((page - 1) * page_size)
         .run(as_dict=True)
